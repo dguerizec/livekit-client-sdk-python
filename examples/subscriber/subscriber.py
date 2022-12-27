@@ -10,7 +10,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.contrib.media import MediaPlayer, MediaBlackhole, MediaRecorder
 
 from livekit_signaling import Signaling, lkrtc
-from livekit_signaling.utils import wintolin, create_pc
+from livekit_signaling.utils import wintolin, create_pc, PeerConnectionEvents
 
 logger = logging.getLogger("livekit-subscriber")
 
@@ -18,16 +18,25 @@ async def run(recorder: MediaRecorder, signaling: Signaling):
     player = MediaBlackhole()
 
     sub_logger = logging.getLogger("livekit-subscriber-sub")
+    sub_events = PeerConnectionEvents(sub_logger)
+    sub = create_pc(events=sub_events)
+
     pub_logger = logging.getLogger("livekit-subscriber-pub")
-    sub = create_pc(sub_logger)
-    pub = create_pc(pub_logger)
+    pub_events = PeerConnectionEvents(pub_logger)
+    pub = create_pc(events=pub_events)
 
     async def add_tracks():
         raise NotImplementedError
 
     @sub.on("track")
     def on_track(track):
-        raise NotImplementedError
+        logger.debug(f"Receiving track {track.kind} **")
+
+        # FIXME: should this be delayed after receiving an update message ?
+        sub.addTrack(track)
+
+        recorder.addTrack(track)
+        asyncio.ensure_future(recorder.start())
 
     async def send_answer():
         ans = await sub.createAnswer()
@@ -109,7 +118,7 @@ if __name__ == "__main__":
     api_key = "devkey"
     api_secret = "secret"
     room = "room1011"
-    identity = f"client-{os.getppid()}"
+    identity = f"pysub-{os.getppid()}"
 
     parser = argparse.ArgumentParser(description="Video stream from the command line")
     parser.add_argument("file", help="Read the media from the file and sent it.")

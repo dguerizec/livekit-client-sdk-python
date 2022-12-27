@@ -10,50 +10,22 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.contrib.media import MediaPlayer, MediaBlackhole
 
 from livekit_signaling import Signaling, lkrtc
-from livekit_signaling.utils import wintolin
+from livekit_signaling.utils import wintolin, create_pc, PeerConnectionEvents
 
 logger = logging.getLogger("livekit-publisher")
 
-
-def create_pc():
-    pc = RTCPeerConnection()
-
-    @pc.on("datachannel")
-    def on_datachannel(channel):
-        logger.debug(f"Data channel created by remote: {channel}")
-
-        @channel.on("message")
-        def on_message(message):
-            logger.debug(f"Message received: {message}")
-
-    @pc.on("connectionstatechange")
-    def on_connectionstatechange():
-        logger.debug(f"Connection state is {pc.connectionState}")
-
-    @pc.on("iceconnectionstatechange")
-    def on_iceconnectionstatechange():
-        logger.debug(f"ICE connection state is {pc.iceConnectionState}")
-
-    @pc.on("icegatheringstatechange")
-    def on_icegatheringstatechange():
-        logger.debug(f"ICE gathering state is {pc.iceGatheringState}")
-
-    @pc.on("signalingstatechange")
-    def on_signalingstatechange():
-        logger.debug(f"Signaling state is {pc.signalingState}")
-
-    @pc.on("track")
-    def on_track(track):
-        logger.debug(f"Receiving track {track.kind}")
-
-    return pc
 
 
 async def run(player: MediaPlayer, signaling: Signaling):
     recorder = MediaBlackhole()
 
-    sub = create_pc()
-    pub = create_pc()
+    sub_logger = logging.getLogger("livekit-subscriber-sub")
+    sub_events = PeerConnectionEvents(sub_logger)
+    sub = create_pc(events=sub_events)
+
+    pub_logger = logging.getLogger("livekit-subscriber-pub")
+    pub_events = PeerConnectionEvents(pub_logger)
+    pub = create_pc(events=pub_events)
 
     pub.addTransceiver("video", direction="sendonly")
 
@@ -168,7 +140,7 @@ if __name__ == "__main__":
     api_key = "devkey"
     api_secret = "secret"
     room = "room1011"
-    identity = f"client-{os.getppid()}"
+    identity = f"pypub-{os.getppid()}"
 
     parser = argparse.ArgumentParser(description="Video stream from the command line")
     parser.add_argument("file", help="Read the media from the file and sent it.")
