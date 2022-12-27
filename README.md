@@ -8,7 +8,7 @@ How to install locally
 How to test
 -----------
 
-    livekit-server --config doc/livekit-config.yaml
+    livekit-server --config doc/livekit-server-config.yaml
 
 How to run
 ----------
