@@ -30,7 +30,7 @@ async def run(recorder: MediaRecorder, signaling: Signaling):
 
     @sub.on("track")
     def on_track(track):
-        logger.debug(f"Receiving track {track.kind} **")
+        logger.debug(f"Receiving track {track.kind}")
 
         # FIXME: should this be delayed after receiving an update message ?
         sub.addTrack(track)
@@ -75,11 +75,6 @@ async def run(recorder: MediaRecorder, signaling: Signaling):
         await sub.setRemoteDescription(offer)
         await send_answer()
 
-    @signaling.on_recv("answer")
-    async def on_answer(answer: RTCSessionDescription):
-        logger.debug(f"PLAYER: RECEIVED ANSWER:\n{wintolin(answer.sdp)}")
-        await pub.setRemoteDescription(answer)
-
     @signaling.on_recv("track_published")
     async def on_track_published(track: lkrtc.TrackPublishedResponse):
         logger.debug("PLAYER: Track published")
@@ -91,11 +86,6 @@ async def run(recorder: MediaRecorder, signaling: Signaling):
         logger.debug(f"Trickle: add subscriber candidate with {target}")
         logger.debug(trickle)
         await sub.addIceCandidate(candidate)
-
-    @signaling.on_sent("offer")
-    async def on_send_offer(offer: RTCSessionDescription):
-        logger.debug(f"Sent offer:\n{wintolin(offer.sdp)}")
-        await add_tracks()
 
     @signaling.on_recv("all_messages")
     async def on_all_messages(message: lkrtc.SignalResponse):
@@ -110,6 +100,14 @@ async def run(recorder: MediaRecorder, signaling: Signaling):
         return
 
     await signaling.run()
+
+async def run_wrapper(recorder: MediaRecorder, signaling: Signaling):
+    try:
+        await run(recorder, signaling)
+    finally:
+        logger.error(f"Exiting")
+        await recorder.stop()
+        await signaling.close()
 
 
 if __name__ == "__main__":
@@ -157,12 +155,13 @@ if __name__ == "__main__":
     recorder = MediaRecorder(args.file)
 
     try:
-        result = asyncio.run(run(
+        result = asyncio.run(run_wrapper(
             recorder=recorder,
             signaling=signaling,
         ))
     except KeyboardInterrupt:
         logger.debug("Exiting")
+    except:
+        logger.exception(f"ERROR:")
     finally:
-        # cleanup
-        asyncio.run(signaling.close())
+        logger.debug("Exiting")

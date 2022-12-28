@@ -111,8 +111,7 @@ class Signaling:
             try:
                 await self._ws.close()
             except:
-                self.logger.info(f"Closing websocket failed")
-                self.logger.exception(f"Closing websocket failed")
+                self.logger.exception(f"ERROR: Closing websocket failed")
                 pass
             self._ws = None
 
@@ -173,6 +172,10 @@ class Signaling:
                 obj = await self.receive()
             except KeyboardInterrupt:
                 self.logger.debug(f"KeyboardInterrupt")
+                await self.close()
+                break
+            except:
+                self.logger.exception(f"ERROR: Failed to receive")
                 await self.close()
                 break
             if obj is None:

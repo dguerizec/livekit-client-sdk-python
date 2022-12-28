@@ -38,6 +38,7 @@ def aio_to_proto_candidate(candidate: RTCIceCandidate):
     })
     return req
 
+
 @dataclass
 class PeerConnectionEvents:
     on_datachannel: Callable[[RTCDataChannel], None]
@@ -47,8 +48,9 @@ class PeerConnectionEvents:
     on_signalingstatechange: Callable[[], None]
     on_track: Callable[[MediaStreamTrack], None]
 
-    def _on_channel(self, channel: RTCDataChannel):
+    def _on_datachannel(self, channel: RTCDataChannel):
         self.logger.debug(f"Data channel created")
+
         @channel.on('message')
         def on_message(message):
             self.logger.debug(f"Received message: {message}")
@@ -71,12 +73,12 @@ class PeerConnectionEvents:
         def on_ended():
             self.logger.debug(f"Track ended")
 
-    def __init__(self, logger: logging.Logger=None):
+    def __init__(self, logger: logging.Logger = None):
         if logger is not None:
             self.logger = logger
         else:
             self.logger = logging.getLogger("PeerConnectionEvents-default")
-        self.on_datachannel = self._on_channel
+        self.on_datachannel = self._on_datachannel
         self.on_connectionstatechange = self._on_connectionstatechange
         self.on_iceconnectionstatechange = self._on_iceconnectionstatechange
         self.on_icegatheringstatechange = self._on_icegatheringstatechange
@@ -87,7 +89,7 @@ class PeerConnectionEvents:
         self.pc = pc
 
 
-def create_pc(events: PeerConnectionEvents=None, logger: logging.Logger = None) -> RTCPeerConnection:
+def create_pc(events: PeerConnectionEvents = None, logger: logging.Logger = None) -> RTCPeerConnection:
     pc = RTCPeerConnection()
 
     if events is None:
@@ -102,4 +104,3 @@ def create_pc(events: PeerConnectionEvents=None, logger: logging.Logger = None) 
     pc.on('track', events.on_track)
 
     return pc
-
