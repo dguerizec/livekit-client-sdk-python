@@ -7,6 +7,8 @@ This is still a work in progress. There are still some (a lot of!) missing featu
 How to install locally
 ----------------------
 
+    sudo apt install libvpx-dev libopusfile-dev libavformat-dev
+
     python -m venv venv
     source venv/bin/activate
     pip install -e .
@@ -35,8 +37,7 @@ Run the subscriber
 ------------------
 
 Note[WIP]:
-    The subscriber can only receive one video track for now.
-    It also does not work without patching aiortc
+    The subscriber does not work without patching aiortc
 
 
     # receive a video track and save it to /tmp/output.mp4
@@ -57,6 +58,8 @@ Note[WIP]: the publisher is not yet working.
     python examples/publisher/publisher.py examples/publisher/video.mp4
 
 
+Logging
+-------
 To get verbose logs, you can add flags
 
     -v --verbose                Output debug info from publisher/subscriber
@@ -75,13 +78,6 @@ livekit/signaling
 
 - What is the version field in ParticipantUpdate ?
 - Why is there sometimes two different versions of the same participant "record" ?
-- My publisher WS client gets disconnected without a Leave message after ~30-40 seconds, but there is no useful debug message in livekit-server log.
-- Is datachannel establishment necessary/mandatory ? If yes, is it mandatory on both PCs ?
+- Is datachannel establishment necessary/mandatory ?
 
-aiortc
-------
-
-- When (and where) is called the _start() method of a track ?
-- What happens when receive two offers or more on the same RTCPeerConnection ?
- 
 

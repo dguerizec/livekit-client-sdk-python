@@ -49,11 +49,19 @@ class PeerConnectionEvents:
     on_track: Callable[[MediaStreamTrack], None]
 
     def _on_datachannel(self, channel: RTCDataChannel):
-        self.logger.debug(f"Data channel created")
+        self.logger.debug(f"Data channel created {channel.label}#{channel.id}")
 
         @channel.on('message')
         def on_message(message):
-            self.logger.debug(f"Received message: {message}")
+            self.logger.debug(f"Received message {channel.label}#{channel.id}: {message}")
+
+        @channel.on('open')
+        def on_open():
+            self.logger.debug(f"Data channel opened {channel.label}#{channel.id}")
+
+        @channel.on('close')
+        def on_close():
+            self.logger.debug(f"Data channel closed {channel.label}#{channel.id}")
 
     def _on_connectionstatechange(self):
         self.logger.debug(f"Connection state changed: {self.pc.connectionState}")

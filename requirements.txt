@@ -1,0 +1,6 @@
+aiortc @ git+https://github.com/dguerizec/aiortc.git
+websockets~=10.4
+pyee~=9.0.4
+setuptools~=65.6.3
+pyOpenSSL==22.1.0
+ndi-python

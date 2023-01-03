@@ -1,7 +1,9 @@
+import time
+
 from .livekit_protobuf_defs import lkrtc, lkmodels
 from .utils import create_access_token, proto_to_aio_candidate, wintolin
 
-from typing import Union, Callable, Optional
+from typing import Union, Callable, Optional, Tuple, List, Dict
 import logging
 import traceback
 import asyncio
@@ -12,7 +14,6 @@ from pyee.base import Handler
 from aiortc import RTCSessionDescription
 
 import websockets
-
 
 
 class SignalingEvents(AsyncIOEventEmitter):
@@ -40,10 +41,9 @@ class Signaling:
         "python": {
             "protocol": 8,
             "sdk": "python",  # sdk python is unknown to livekit server, but it shouldn't matter much
-            "version": "8",   # this version is made up, as python is not in the livekit supported protocols
+            "version": "8",  # this version is made up, as python is not in the livekit supported protocols
         },
     }
-
 
     def __init__(self, host: str, port: int, room: str, api_key: str, api_secret: str, identity: str = ""):
         # setup event emitters
@@ -60,6 +60,7 @@ class Signaling:
         self.token = create_access_token(self.api_key, self.api_secret, self.room, self.identity)
         self._ws = None
         self.logger = logging.getLogger("livekit-signaling")
+        self.ping_task = None
 
     def set_log_level(self, level):
         self.logger.setLevel(level)
@@ -86,24 +87,41 @@ class Signaling:
         else:
             return self.sent_events.add_listener(event, handler)
 
-    async def connect(self, sdk=None) -> bool:
-        if self._ws is None:
-            self.logger.debug(f"connecting to {self.host}:{self.port}")
-            secure = ['', 's'][self.port == 443]
-            param_dict = {
-                "access_token": self.token,
-                "auto_subscribe": self.auto_subscribe,
-            }
-            param_dict.update(self.sdk_params[sdk or self.sdk])
+    async def connect_and_run(self, sdk=None):
+        self.logger.debug(f"connecting to {self.host}:{self.port}")
+        secure = ['', 's'][self.port == 443]
+        param_dict = {
+            "access_token": self.token,
+            "auto_subscribe": self.auto_subscribe,
+        }
+        param_dict.update(self.sdk_params[sdk or self.sdk])
 
-            params = '&'.join([f"{k}={v}" for k, v in param_dict.items()])
-            try:
-                self._ws = await websockets.connect(f"ws{secure}://{self.host}:{self.port}{self.uri}?{params}")
-            except:
-                self.logger.exception(f"Failed to connect to {self.host}:{self.port}{self.uri}?{params}")
-                return False
-            self.logger.debug(f"connected to {self.host}:{self.port}")
-            return True
+        params = '&'.join([f"{k}={v}" for k, v in param_dict.items()])
+        url = f"ws{secure}://{self.host}:{self.port}{self.uri}?{params}"
+
+        try:
+            async for self._ws in websockets.connect(url):
+                try:
+                    self.logger.error(f"Connected to {url}...")
+                    while True:
+                        await self.receive()
+                    raise Exception("Websocket unexpectedly closed")
+                except KeyboardInterrupt:
+                    await self.close()
+                    break
+                except websockets.ConnectionClosed:
+                    self.logger.error(f"Connection closed - Reconnecting...")
+                    raise
+                    continue
+                except:
+                    self.logger.exception(f"Unexpected error")
+                    await self.close()
+                    break
+        except:
+            self.logger.exception(f"Failed to connect to {url}")
+            return
+
+        self.logger.error(f"Disconnected from {url}, not retrying.")
 
     async def close(self):
         if self._ws is not None:
@@ -115,33 +133,37 @@ class Signaling:
                 pass
             self._ws = None
 
-    async def send(self, obj):
-        await self.connect()
-        self.logger.debug(f"=" * 80)
-        self.logger.info(f"Signal sending: {type(obj)} {obj}")
-        if self.logger.level == logging.DEBUG:
-            for desc, field in obj.ListFields():
-                self.logger.debug(f"Desc: {type(desc)} {desc.full_name} {desc.name}")
-                self.logger.debug(f"Field: {type(field)} {field}")
+    async def send(self, obj, no_log=False):
+        if not no_log:
+            self.logger.debug(f"=" * 80)
+            self.logger.info(f"Signal sending: {type(obj)} {obj}")
+            if self.logger.level == logging.DEBUG:
+                for desc, field in obj.ListFields():
+                    self.logger.debug(f"Desc: {type(desc)} {desc.full_name} {desc.name}")
+                    self.logger.debug(f"Field: {type(field)} {field}")
 
         rc = await self._ws.send(obj.SerializeToString())
 
-        if self._emitting_requests:
+        if self._emitting_requests and not no_log:
             self._emit_request(obj)
 
         return rc
 
     async def receive(self):
-        await self.connect()
         try:
             r = await self._ws.recv()
         except asyncio.exceptions.CancelledError:
             self.logger.exception(f"Websocket recv cancelled")
+            raise
             await self.close()
+            return None
+        except asyncio.exceptions.IncompleteReadError:
+            raise
             return None
         except:
             self.logger.exception(f"ERROR on websocket recv")
             self.logger.debug(traceback.format_exc())
+            raise
             await self.close()
             return None
 
@@ -151,42 +173,41 @@ class Signaling:
         except:
             self.logger.error(f"ERROR: {traceback.format_exc()}")
             raise
-        self.logger.debug(f"=" * 80)
-        self.logger.info(f"Signal receiving: {type(req)} {req}")
-        if self.logger.level == logging.DEBUG:
-            for desc, field in req.ListFields():
-                self.logger.debug(f"Desc: {type(desc)} {desc.full_name} {desc.name}")
-                self.logger.debug(f"Field: {type(field)} {field}")
+        if req.WhichOneof("message") != "pong":
+            self.logger.debug(f"=" * 80)
+            self.logger.info(f"Signal receiving: {type(req)} {req}")
+            if self.logger.level == logging.DEBUG:
+                for desc, field in req.ListFields():
+                    self.logger.debug(f"Desc: {type(desc)} {desc.full_name} {desc.name}")
+                    self.logger.debug(f"Field: {type(field)} {field}")
 
         self._emit_response(req)
         return req
 
-    async def run(self):
+    async def run(self, sdk=None):
         # setup locally handled events
         self.on_recv("refresh_token", self._on_token_refresh)
+        self.on_recv("join", self._on_join)
         self.on_recv("leave", self._on_leave)
 
-        await self.connect()
+        await self.connect_and_run(sdk=sdk)
+
+    async def send_pings(self, interval=30, timeout=60):
+        self.logger.info(f"Sending pings at {interval} seconds")
+
         while True:
-            try:
-                obj = await self.receive()
-            except KeyboardInterrupt:
-                self.logger.debug(f"KeyboardInterrupt")
-                await self.close()
-                break
-            except:
-                self.logger.exception(f"ERROR: Failed to receive")
-                await self.close()
-                break
-            if obj is None:
-                break
+            req = lkrtc.SignalRequest()
+            current_time = int(1000 * time.time())
+            req.ping = current_time
+            await self.send(req, no_log=True)
+            await asyncio.sleep(interval)
 
     async def send_answer(self, local_desc):
         req = lkrtc.SignalRequest()
         req.answer.type = local_desc.type
         req.answer.sdp = local_desc.sdp
 
-        self.logger.debug(f"SENDING ANSWER:\n{wintolin(local_desc.sdp)}")
+        self.logger.debug(f"Sending ANSWER:\n{wintolin(local_desc.sdp)}")
 
         return await self.send(req)
 
@@ -195,7 +216,7 @@ class Signaling:
         req.offer.type = local_desc.type
         req.offer.sdp = local_desc.sdp
 
-        self.logger.debug(f"SENDING OFFER:\n{wintolin(local_desc.sdp)}")
+        self.logger.debug(f"Sending OFFER:\n{wintolin(local_desc.sdp)}")
 
         return await self.send(req)
 
@@ -217,14 +238,80 @@ class Signaling:
         else:
             raise NotImplementedError("Track type '{kind}' not supported")
 
-        self.logger.debug(f"PLAYER: Sending add track '{kind}' request, id={track.id}")
+        self.logger.debug(f"Sending add track '{kind}' request, id={track.id}")
         return await self.send(req)
 
     async def send_subscription_permission(self):
         req = lkrtc.SignalRequest()
         req.subscription_permission.all_participants = True
-        self.logger.debug(f"PLAYER: Sending subscription permission request to all participants")
+        self.logger.debug(f"Sending subscription permission request to all participants")
         return await self.send(req)
+
+    async def send_subscription_request(self, pax_tracks: Dict[str, List[str]]):
+        """
+        message UpdateSubscription {
+          repeated string track_sids = 1;
+          bool subscribe = 2;
+          repeated ParticipantTracks participant_tracks = 3;
+        }
+        message ParticipantTracks {
+          // participant ID of participant to whom the tracks belong
+          string participant_sid = 1;
+          repeated string track_sids = 2;
+        }
+        """
+        req = lkrtc.SignalRequest()
+        req.subscription.subscribe = True
+        for pax_id, track_ids in pax_tracks.items():
+            pax_tracks = req.subscription.participant_tracks.add()
+            pax_tracks.participant_sid = pax_id
+            for track_id in track_ids:
+                pax_tracks.track_sids.append(track_id)
+
+        self.logger.debug(f"Sending subscription request to the server")
+        return await self.send(req)
+
+    async def send_update_track_settings(self, track_id, quality=None, width=None, height=None, ssrc=None):
+        """
+        message UpdateTrackSettings {
+          repeated string track_sids = 1;
+          // when true, the track is placed in a paused state, with no new data returned
+          bool disabled = 3;
+          // deprecated in favor of width & height
+          VideoQuality quality = 4;
+          // for video, width to receive
+          uint32 width = 5;
+          // for video, height to receive
+          uint32 height = 6;
+          uint32 fps = 7;
+        }
+        """
+        qualities = {
+            "low": lkmodels.VideoQuality.LOW,
+            "medium": lkmodels.VideoQuality.MEDIUM,
+            "high": lkmodels.VideoQuality.HIGH,
+        }
+        req = lkrtc.SignalRequest()
+        req.track_setting.track_sids.append(track_id)
+        req.track_setting.disabled = False
+        req.track_setting.quality = qualities.get(quality, "low")
+        if width:
+            req.track_setting.width = width
+        if height:
+            req.track_setting.height = height
+        if ssrc:
+            req.track_setting.ssrc = ssrc
+        req.track_setting.fps = 30
+        self.logger.debug(f"Sending update track settings request to the server")
+        return await self.send
+
+    def _on_join(self, join):
+        timeout = join.ping_timeout or 42
+        interval = join.ping_interval or timeout / 2
+        self.logger.debug(f"PLAYER: Received join response")
+        if self.ping_task is not None:
+            self.ping_task.cancel()
+        self.ping_task = asyncio.create_task(self.send_pings(interval, timeout))
 
     def _on_token_refresh(self, token):
         # save the token for reconnection
@@ -274,8 +361,8 @@ class Signaling:
             self.logger.debug(f"RECEIVING UNKNOWN MESSAGE: {input}")
         self.received_events.emit(event, output)
 
-        if self.received_events.emit_all:
-            self.received_events.emit("all_messages", output)
+        if self.received_events.emit_all and event != "pong":
+            self.received_events.emit("all_messages", event, output)
 
     def _emit_request(self, input: lkrtc.SignalRequest):
         if input.WhichOneof('message') == "offer":
@@ -312,4 +399,26 @@ class Signaling:
         self.sent_events.emit(event, output)
 
         if self.sent_events.emit_all:
-            self.sent_events.emit("all_messages", output)
+            self.sent_events.emit("all_messages", event, output)
+
+    @classmethod
+    def track_type_name(cls, type: lkmodels.TrackType):
+        if type == lkmodels.TrackType.AUDIO:
+            return "audio"
+        elif type == lkmodels.TrackType.VIDEO:
+            return "video"
+        elif type == lkmodels.TrackType.DATA:
+            return "data"
+        else:
+            raise ValueError(f"Unknown track type: {type}")
+
+    @classmethod
+    def track_type(cls, name: str):
+        if name == "audio":
+            return lkmodels.TrackType.AUDIO
+        elif name == "video":
+            return lkmodels.TrackType.VIDEO
+        elif name == "data":
+            return lkmodels.TrackType.DATA
+        else:
+            raise ValueError(f"Unknown track type: {name}")
