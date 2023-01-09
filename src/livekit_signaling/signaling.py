@@ -191,20 +191,13 @@ class Signaling:
                 pass
             self._ws = None
 
-    async def send(self, obj: Union[lkrtc.SignalRequest, LK.LKBase], no_log=False):
-        if isinstance(obj, LK.LKBase):
-            obj = obj.to_signal_request()
-        else:
-            raise Exception("Can only send LKBase objects")
+    async def send(self, obj: LK.LKBase, no_log=False):
+        lkobj = obj.to_signal_request()
         if not no_log:
             self.logger.debug(f"=" * 80)
             self.logger.info(f"Signal sending: {type(obj)} {obj}")
-            if self.logger.level == logging.DEBUG:
-                for desc, field in obj.ListFields():
-                    self.logger.debug(f"Desc: {type(desc)} {desc.full_name} {desc.name}")
-                    self.logger.debug(f"Field: {type(field)} {field}")
 
-        rc = await self._ws.send(obj.SerializeToString())
+        rc = await self._ws.send(lkobj.SerializeToString())
 
         if self._emitting_requests and not no_log:
             self._emit_request(obj)
@@ -243,7 +236,12 @@ class Signaling:
                     self.logger.debug(f"Desc: {type(desc)} {desc.full_name} {desc.name}")
                     self.logger.debug(f"Field: {type(field)} {field}")
 
-        self._emit_response(req)
+        try:
+            obj = LK.from_signal_response(req)
+        except Exception as e:
+            self.logger.exception(f"Failed to parse input: {type(input)} {input}")
+            raise
+        self._emit_response(obj)
         return req
 
     async def run(self, sdk=None):
@@ -312,10 +310,8 @@ class Signaling:
         return await self.send(add_track)
 
     async def send_subscription_permission(self):
-        req = lkrtc.SignalRequest()
-        req.subscription_permission.all_participants = True
         self.logger.debug(f"Sending subscription permission request to all participants")
-        return await self.send(req)
+        return await self.send(LK.SubscriptionPermission(all_participants=True, track_permissions=[]))
 
     async def send_subscription_request(self, pax_tracks: Dict[str, List[str]]):
         """
@@ -362,7 +358,6 @@ class Signaling:
           uint32 fps = 7;
         }
         """
-        #        req = LK.UpdateTrackSettings(track_sids=[track_id], disabled=False, width=width, height=height, quality=LK.VideoQuality.HIGH, fps=30)
         req = LK.UpdateTrackSettings(track_sids=[track_id], disabled=False, width=width, height=height, quality=None, fps=30)
         self.logger.debug(f"Sending update track settings request to the server")
         return await self.send(req)
@@ -383,10 +378,9 @@ class Signaling:
         # close the websocket
         asyncio.create_task(self.close())
 
-    def _emit_response(self, input: lkrtc.SignalResponse):
+    def _emit_response(self, input: LK.LKBase):
         try:
-            obj = LK.from_signal_response(input)
-            event, output = obj.get_response_name(), obj
+            event, output = input.get_response_name(), input
         except Exception as e:
             self.logger.exception(f"Failed to parse input: {type(input)} {input}")
             raise
@@ -396,10 +390,9 @@ class Signaling:
         if self.received_events.emit_all and event != "pong":
             self.received_events.emit("all_messages", event, output)
 
-    def _emit_request(self, input: lkrtc.SignalRequest):
+    def _emit_request(self, input: LK.LKBase):
         try:
-            obj = LK.from_signal_request(input)
-            event, output = obj.get_request_name(), obj
+            event, output = input.get_request_name(), input
         except Exception as e:
             self.logger.exception(f"Failed to parse input: {type(input)} {input}")
             raise
