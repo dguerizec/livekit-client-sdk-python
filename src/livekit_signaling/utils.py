@@ -1,9 +1,9 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
-from .livekit_protobuf_defs import lkrtc
+from .livekit_protobuf_defs import lkrtc  # type: ignore
 from livekit import AccessToken, VideoGrant
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCDataChannel, MediaStreamTrack
 from aiortc.sdp import candidate_from_sdp, candidate_to_sdp
@@ -77,11 +77,12 @@ class PeerConnectionEvents:
 
     def _on_track(self, track: MediaStreamTrack):
         self.logger.debug(f"Track received: {track.kind}")
+
         @track.on('ended')
         def on_ended():
             self.logger.debug(f"Track ended")
 
-    def __init__(self, logger: logging.Logger = None):
+    def __init__(self, logger: Optional[logging.Logger] = None):
         if logger is not None:
             self.logger = logger
         else:
@@ -92,12 +93,14 @@ class PeerConnectionEvents:
         self.on_icegatheringstatechange = self._on_icegatheringstatechange
         self.on_signalingstatechange = self._on_signalingstatechange
         self.on_track = self._on_track
+        self.pc = None
 
     def set_pc(self, pc: RTCPeerConnection):
         self.pc = pc
 
 
-def create_pc(events: PeerConnectionEvents = None, logger: logging.Logger = None) -> RTCPeerConnection:
+def create_pc(events: Optional[PeerConnectionEvents] = None,
+              logger: Optional[logging.Logger] = None) -> RTCPeerConnection:
     pc = RTCPeerConnection()
 
     if events is None:
@@ -112,3 +115,16 @@ def create_pc(events: PeerConnectionEvents = None, logger: logging.Logger = None
     pc.on('track', events.on_track)
 
     return pc
+
+
+def get_track_ids(track: MediaStreamTrack):
+    msid = getattr(track, "msid", None)
+    if msid is None:
+        return None, None
+    if not " " in msid:
+        return None, msid
+
+    bits = msid.split(" ")
+    pax_id = bits[0].split(":")[0] if bits and len(bits) > 0 and ":" in bits[0] else None
+    track_id = bits[1] if bits and len(bits) > 1 else None
+    return pax_id, track_id

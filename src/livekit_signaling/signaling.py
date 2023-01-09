@@ -1,17 +1,21 @@
 import time
+from dataclasses import dataclass, field
 
-from .livekit_protobuf_defs import lkrtc, lkmodels
-from .utils import create_access_token, proto_to_aio_candidate, wintolin
+import pyee
 
-from typing import Union, Callable, Optional, Tuple, List, Dict
+from .livekit_protobuf_defs import lkrtc
+from .utils import create_access_token, wintolin
+from . import livekit_types as LK
+
+from typing import Union, Callable, Optional, List, Dict
 import logging
 import traceback
 import asyncio
 
-from pyee.asyncio import AsyncIOEventEmitter
+from pyee import AsyncIOEventEmitter
 from pyee.base import Handler
 
-from aiortc import RTCSessionDescription
+from aiortc import RTCSessionDescription  # type: ignore
 
 import websockets
 
@@ -20,6 +24,63 @@ class SignalingEvents(AsyncIOEventEmitter):
     def __init__(self):
         super().__init__()
         self.emit_all = False
+
+
+@dataclass
+class ParticipantTracksTracker(pyee.AsyncIOEventEmitter):
+    participants: Dict[LK.ParticipantId, List[LK.TrackId]] = field(default_factory=dict)
+    tracks: Dict[LK.TrackId, LK.ParticipantId] = field(default_factory=dict)
+
+    # define events
+    participant_added: str = "participant_added"
+    participant_removed: str = "participant_removed"
+    track_added: str = "track_added"
+    track_removed: str = "track_removed"
+
+    def __init__(self):
+        super().__init__()
+        self.participants = {}
+        self.tracks = {}
+
+    def add_participant(self, participant: LK.ParticipantId):
+        if participant not in self.participants:
+            self.participants[participant] = []
+            self.emit(self.participant_added, participant)
+
+    def add_track(self, participant: LK.ParticipantId, track: LK.TrackId):
+        self.add_participant(participant)
+        if track not in self.tracks:
+            self.tracks[track] = participant
+            self.participants[participant].append(track)
+            self.emit(self.track_added, participant, track)
+
+    def remove_track(self, track: LK.TrackId):
+        if track in self.tracks:
+            participant = self.tracks.pop(track)
+            self.participants[participant].remove(track)
+            self.emit(self.track_removed, participant, track)
+
+    def remove_participant(self, participant: LK.ParticipantId):
+        if participant in self.participants:
+            tracks = self.participants.pop(participant)
+            for track in tracks:
+                self.tracks.pop(track)
+            self.emit(self.participant_removed, participant)
+
+    def get_lkParticipantTracks(self, participant_id: Optional[LK.ParticipantId] = None,
+                                track_id: Optional[LK.TrackId] = None) -> Optional[
+        LK.ParticipantTracks]:
+        if participant_id in self.participants:
+            tracks = self.participants[participant_id]
+            if track_id is None:
+                return LK.ParticipantTracks(participant_id, tracks)
+            elif track_id in tracks:
+                return LK.ParticipantTracks(participant_id, [track_id])
+            else:
+                return None
+        if track_id in self.tracks:
+            return LK.ParticipantTracks(self.tracks[track_id], self.participants[self.tracks[track_id]])
+        return None
 
 
 class Signaling:
@@ -44,6 +105,7 @@ class Signaling:
             "version": "8",  # this version is made up, as python is not in the livekit supported protocols
         },
     }
+    paxtracker = ParticipantTracksTracker()
 
     def __init__(self, host: str, port: int, room: str, api_key: str, api_secret: str, identity: str = ""):
         # setup event emitters
@@ -57,14 +119,10 @@ class Signaling:
         self.api_key = api_key
         self.api_secret = api_secret
         self.identity = identity
-        self.token = create_access_token(self.api_key, self.api_secret, self.room, self.identity)
+        self.token: LK.Token = create_access_token(self.api_key, self.api_secret, self.room, self.identity)
         self._ws = None
         self.logger = logging.getLogger("livekit-signaling")
         self.ping_task = None
-
-    def set_log_level(self, level):
-        self.logger.setLevel(level)
-        self.logger.critical(f"Signaling log level set to {self.logger.level}")
 
     def on_recv(
             self, event: str, handler: Optional[Handler] = None
@@ -102,7 +160,7 @@ class Signaling:
         try:
             async for self._ws in websockets.connect(url):
                 try:
-                    self.logger.error(f"Connected to {url}...")
+                    self.logger.info(f"Connected to {url}...")
                     while True:
                         await self.receive()
                     raise Exception("Websocket unexpectedly closed")
@@ -133,7 +191,11 @@ class Signaling:
                 pass
             self._ws = None
 
-    async def send(self, obj, no_log=False):
+    async def send(self, obj: Union[lkrtc.SignalRequest, LK.LKBase], no_log=False):
+        if isinstance(obj, LK.LKBase):
+            obj = obj.to_signal_request()
+        else:
+            raise Exception("Can only send LKBase objects")
         if not no_log:
             self.logger.debug(f"=" * 80)
             self.logger.info(f"Signal sending: {type(obj)} {obj}")
@@ -196,50 +258,58 @@ class Signaling:
         self.logger.info(f"Sending pings at {interval} seconds")
 
         while True:
-            req = lkrtc.SignalRequest()
             current_time = int(1000 * time.time())
-            req.ping = current_time
-            await self.send(req, no_log=True)
+            await self.send(LK.Ping(time=current_time), no_log=True)
             await asyncio.sleep(interval)
 
     async def send_answer(self, local_desc):
-        req = lkrtc.SignalRequest()
-        req.answer.type = local_desc.type
-        req.answer.sdp = local_desc.sdp
-
         self.logger.debug(f"Sending ANSWER:\n{wintolin(local_desc.sdp)}")
 
-        return await self.send(req)
+        #return await self.send(req)
+        answer = LK.SessionDescription(type=local_desc.type, sdp=local_desc.sdp)
+        return await self.send(answer)
 
     async def send_offer(self, local_desc):
-        req = lkrtc.SignalRequest()
-        req.offer.type = local_desc.type
-        req.offer.sdp = local_desc.sdp
-
         self.logger.debug(f"Sending OFFER:\n{wintolin(local_desc.sdp)}")
 
-        return await self.send(req)
+        offer = LK.SessionDescription(type=local_desc.type, sdp=local_desc.sdp)
+        return await self.send(offer)
+
+        #return await self.send(req)
 
     async def send_add_track(self, track):
         kind = track.kind
-        req = lkrtc.SignalRequest()
-        req.add_track.cid = track.id
-        if kind == "video":
-            req.add_track.type = lkmodels.TrackType.VIDEO
-            req.add_track.width = 1920  # track.width
-            req.add_track.height = 1080  # track.height
-            req.add_track.source = lkmodels.TrackSource.CAMERA
-            layer = lkmodels.VideoLayer()
-            layer.quality = lkmodels.VideoQuality.HIGH
-            layer.bitrate = 1000000
-            layer.width = 1920
-            layer.height = 1080
-            req.add_track.layers.append(layer)
-        else:
+        if kind != "video":
             raise NotImplementedError("Track type '{kind}' not supported")
 
+        layer = LK.VideoLayer(
+            quality=LK.VideoQuality.HIGH,
+            bitrate=1000000,
+            width=1920,
+            height=1080,
+            ssrc=None
+        )
+
+        add_track = LK.AddTrackRequest(
+            cid=track.id,
+            type=LK.TrackType.VIDEO,
+            source=LK.TrackSource.CAMERA,
+            width=1920,
+            height=1080,
+            layers=[layer],
+
+            name=None,
+            muted=False,
+            disable_dtx=None,
+            simulcast_codecs=[],
+            sid=None,
+            stereo=None,
+            disable_red=None
+
+        )
+
         self.logger.debug(f"Sending add track '{kind}' request, id={track.id}")
-        return await self.send(req)
+        return await self.send(add_track)
 
     async def send_subscription_permission(self):
         req = lkrtc.SignalRequest()
@@ -260,18 +330,24 @@ class Signaling:
           repeated string track_sids = 2;
         }
         """
-        req = lkrtc.SignalRequest()
-        req.subscription.subscribe = True
+        subreq = LK.UpdateSubscription(subscribe=True, participant_tracks=[], track_sids=[])
         for pax_id, track_ids in pax_tracks.items():
-            pax_tracks = req.subscription.participant_tracks.add()
-            pax_tracks.participant_sid = pax_id
-            for track_id in track_ids:
-                pax_tracks.track_sids.append(track_id)
+            participant_tracks = LK.ParticipantTracks(participant_sid=pax_id, track_sids=track_ids)
+            subreq.participant_tracks.append(participant_tracks)
+            subreq.track_sids.extend(track_ids)
 
         self.logger.debug(f"Sending subscription request to the server")
-        return await self.send(req)
+        return await self.send(subreq)
 
-    async def send_update_track_settings(self, track_id, quality=None, width=None, height=None, ssrc=None):
+    async def send_unsubscription_request(self, unsub: LK.UpdateSubscription):
+        self.logger.debug(f"Sending unsubscription request to the server")
+        return await self.send(unsub)
+
+    async def send_update_track_settings(self,
+                                         track_id: str,
+                                         width: Optional[int] = None,
+                                         height: Optional[int] = None
+                                         ):
         """
         message UpdateTrackSettings {
           repeated string track_sids = 1;
@@ -286,139 +362,49 @@ class Signaling:
           uint32 fps = 7;
         }
         """
-        qualities = {
-            "low": lkmodels.VideoQuality.LOW,
-            "medium": lkmodels.VideoQuality.MEDIUM,
-            "high": lkmodels.VideoQuality.HIGH,
-        }
-        req = lkrtc.SignalRequest()
-        req.track_setting.track_sids.append(track_id)
-        req.track_setting.disabled = False
-        req.track_setting.quality = qualities.get(quality, "low")
-        if width:
-            req.track_setting.width = width
-        if height:
-            req.track_setting.height = height
-        if ssrc:
-            req.track_setting.ssrc = ssrc
-        req.track_setting.fps = 30
+        #        req = LK.UpdateTrackSettings(track_sids=[track_id], disabled=False, width=width, height=height, quality=LK.VideoQuality.HIGH, fps=30)
+        req = LK.UpdateTrackSettings(track_sids=[track_id], disabled=False, width=width, height=height, quality=None, fps=30)
         self.logger.debug(f"Sending update track settings request to the server")
-        return await self.send
+        return await self.send(req)
 
-    def _on_join(self, join):
+    def _on_join(self, join: LK.JoinResponse):
         timeout = join.ping_timeout or 42
         interval = join.ping_interval or timeout / 2
-        self.logger.debug(f"PLAYER: Received join response")
+        self.logger.debug(f"Received join response")
         if self.ping_task is not None:
             self.ping_task.cancel()
         self.ping_task = asyncio.create_task(self.send_pings(interval, timeout))
 
-    def _on_token_refresh(self, token):
+    def _on_token_refresh(self, token: LK.Token):
         # save the token for reconnection
         self.token = token
 
-    def _on_leave(self, reason):
+    def _on_leave(self, leave: LK.LeaveRequest):
         # close the websocket
         asyncio.create_task(self.close())
 
     def _emit_response(self, input: lkrtc.SignalResponse):
-        if input.WhichOneof('message') == 'join':
-            event, output = "join", input.join
-        elif input.WhichOneof('message') == "offer":
-            event, output = "offer", RTCSessionDescription(sdp=input.offer.sdp, type=input.offer.type)
-        elif input.WhichOneof('message') == "answer":
-            event, output = "answer", RTCSessionDescription(sdp=input.answer.sdp, type=input.answer.type)
-        elif input.WhichOneof('message') == 'trickle':
-            event, output = "trickle", (proto_to_aio_candidate(input.trickle.candidateInit), input.trickle.target)
-        elif input.WhichOneof('message') == 'update':
-            event, output = "update", input.update
-        elif input.WhichOneof('message') == 'track_published':
-            event, output = "track_published", input.track_published
-        elif input.WhichOneof('message') == 'leave':
-            event, output = "leave", input.leave
-        elif input.WhichOneof('message') == 'mute':
-            event, output = "mute", input.mute
-        elif input.WhichOneof('message') == 'speakers_changed':
-            event, output = "speakers_changed", input.speakers_changed
-        elif input.WhichOneof('message') == 'room_update':
-            event, output = "room_update", input.room_update
-        elif input.WhichOneof('message') == 'connection_quality':
-            event, output = "connection_quality", input.connection_quality
-        elif input.WhichOneof('message') == 'stream_state_update':
-            event, output = "stream_state_update", input.stream_state_update
-        elif input.WhichOneof('message') == 'subscribed_quality_update':
-            event, output = "subscribed_quality_update", input.subscribed_quality_update
-        elif input.WhichOneof('message') == 'subscription_permission_update':
-            event, output = "subscription_permission_update", input.subscription_permission_update
-        elif input.WhichOneof('message') == 'refresh_token':
-            event, output = "refresh_token", input.refresh_token
-        elif input.WhichOneof('message') == 'track_unpublished':
-            event, output = "track_unpublished", input.track_unpublished
-        elif input.WhichOneof('message') == 'pong':
-            event, output = "pong", input.pong
-        else:
-            event, output = "unknown", input
-            self.logger.debug(f"RECEIVING UNKNOWN MESSAGE: {input}")
+        try:
+            obj = LK.from_signal_response(input)
+            event, output = obj.get_response_name(), obj
+        except Exception as e:
+            self.logger.exception(f"Failed to parse input: {type(input)} {input}")
+            raise
+
         self.received_events.emit(event, output)
 
         if self.received_events.emit_all and event != "pong":
             self.received_events.emit("all_messages", event, output)
 
     def _emit_request(self, input: lkrtc.SignalRequest):
-        if input.WhichOneof('message') == "offer":
-            event, output = "offer", RTCSessionDescription(sdp=input.offer.sdp, type=input.offer.type)
-        elif input.WhichOneof('message') == "answer":
-            event, output = "answer", RTCSessionDescription(sdp=input.answer.sdp, type=input.answer.type)
-        elif input.WhichOneof('message') == 'trickle':
-            event, output = "trickle", (proto_to_aio_candidate(input.trickle.candidateInit), input.trickle.target)
-        elif input.WhichOneof('message') == 'add_track':
-            event, output = "add_track", input.add_track
-        elif input.WhichOneof('message') == 'mute':
-            event, output = "mute", input.mute
-        elif input.WhichOneof('message') == 'subscription':
-            event, output = "subscription", input.subscription
-        elif input.WhichOneof('message') == 'track_setting':
-            event, output = "track_setting", input.track_setting
-        elif input.WhichOneof('message') == 'leave':
-            event, output = "leave", None
-        elif input.WhichOneof('message') == 'update_layers':
-            event, output = "update_layers", input.update_layers
-        elif input.WhichOneof('message') == 'subscription_permission':
-            event, output = "subscription_permission", input.subscription_permission
-        elif input.WhichOneof('message') == 'sync_state':
-            event, output = "sync_state", input.sync_state
-        elif input.WhichOneof('message') == 'simulate':
-            event, output = "simulate", input.simulate
-        elif input.WhichOneof('message') == 'ping':
-            event, output = "ping", input.ping
-        else:
-            event, output = "unkown", input
-            kind = input.WhichOneof('message')
-            self.logger.debug(f"SENDING UNKNOWN MESSAGE: {type(kind)} {kind} {input}")
+        try:
+            obj = LK.from_signal_request(input)
+            event, output = obj.get_request_name(), obj
+        except Exception as e:
+            self.logger.exception(f"Failed to parse input: {type(input)} {input}")
+            raise
 
         self.sent_events.emit(event, output)
 
         if self.sent_events.emit_all:
             self.sent_events.emit("all_messages", event, output)
-
-    @classmethod
-    def track_type_name(cls, type: lkmodels.TrackType):
-        if type == lkmodels.TrackType.AUDIO:
-            return "audio"
-        elif type == lkmodels.TrackType.VIDEO:
-            return "video"
-        elif type == lkmodels.TrackType.DATA:
-            return "data"
-        else:
-            raise ValueError(f"Unknown track type: {type}")
-
-    @classmethod
-    def track_type(cls, name: str):
-        if name == "audio":
-            return lkmodels.TrackType.AUDIO
-        elif name == "video":
-            return lkmodels.TrackType.VIDEO
-        elif name == "data":
-            return lkmodels.TrackType.DATA
-        else:
-            raise ValueError(f"Unknown track type: {name}")

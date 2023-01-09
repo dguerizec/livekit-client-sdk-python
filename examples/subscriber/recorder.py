@@ -2,16 +2,20 @@ import asyncio
 import os
 from collections import namedtuple
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict
 
-import av
-from aiortc import MediaStreamTrack
-from aiortc.contrib.media import MediaRecorderContext
-from aiortc.mediastreams import MediaStreamError
-from av.video import VideoFrame
-
+import av  # type: ignore
+from aiortc import MediaStreamTrack  # type: ignore
+from aiortc.contrib.media import MediaRecorderContext  # type: ignore
+from aiortc.mediastreams import MediaStreamError  # type: ignore
+from av.video import VideoFrame  # type: ignore
 
 import logging
+
+from pyee import AsyncIOEventEmitter
+
+from livekit_signaling.utils import get_track_ids
+import livekit_signaling.livekit_types as LK
 
 logger = logging.getLogger("livekit-recorder")
 
@@ -22,8 +26,10 @@ class StreamContext:
     context: MediaRecorderContext
     container: av.container.OutputContainer
 
+tracks = {}
+
 @dataclass
-class FrameRecorder:
+class FrameRecorder(AsyncIOEventEmitter):
     """
     A media sink that writes audio and/or video to series of files.
 
@@ -42,7 +48,12 @@ class FrameRecorder:
     """
     containers: List[StreamContext]
 
+    track_added = "track_added"
+    track_removed = "track_removed"
+    recorder_stopped = "recorder_stopped"
+
     def __init__(self, path):
+        super().__init__()
         self.path = path
         self.containers = []
 
@@ -57,8 +68,16 @@ class FrameRecorder:
         if track.kind == "audio":
             return
 
+        pax_id, track_id = get_track_ids(track)
+
+        track.trid = track_id
+        track.paxid = track_id
+        if tracks.get(track_id):
+            logger.debug(f"Track {pax_id} {track_id} already being recorded")
+            return
+
         try:
-            path = f"{self.path}/track-{track.id}"
+            path = f"{self.path}/track-{track_id}"
             file = f"{path}/frame-%d.png"
             #file = f"{path}/video.mp4"
             try:
@@ -67,12 +86,11 @@ class FrameRecorder:
                 pass
             os.mkdir(path)
 
-            logger.debug(f"Recording track {track.id} to {file}")
+            logger.debug(f"Recording track {track_id} to {file}")
 
-            options = {}
+            options: Dict[str, object] = {}
 
             container = av.open(file=file, format=None, mode="w", options=options)
-            tracks = {}
 
             if container.format.name == "image2":
                 stream = container.add_stream("png", rate=30)
@@ -87,24 +105,40 @@ class FrameRecorder:
 
             # start the recording
             record.context.task = asyncio.ensure_future(self.__run_track(record))
+
+            tracks[track_id] = record
+            self.emit(self.track_added, track)
+
         except Exception as e:
             logger.exception(f"ERROR: Cannot add track {track.kind} #{track.id} to recorder")
             await self.stop()
             raise
 
-    #async def start(self):
-    #    """
-    #    Start recording.
-    #    """
-    #    for track, context in self.__tracks.items():
-    #        if context.task is None:
-    #            context.task = asyncio.ensure_future(self.__run_track(track, context))
+    def disconnect_track(self, track_id: LK.TrackId):
+        record = tracks.pop(track_id, None)
+        if record:
+            # don't stop the track, because it won't restart
+            #record.track.stop()
+            if record.context.task is not None:
+                logger.debug(f"Stopping recording of track {track_id}")
+                record.context.task.cancel()
+                record.context.task = None
+                for packet in record.context.stream.encode(None):
+                    record.container.mux(packet)
+
+            if record.container:
+                record.container.close()
+                record.container = None
+            self.emit(self.track_removed, track_id)
+
 
     async def stop(self):
         """
         Stop recording.
         """
         for record in self.containers:
+            track_id = record.track.trid
+            record.track.stop()
             if record.context.task is not None:
                 record.context.task.cancel()
                 record.context.task = None
@@ -114,6 +148,8 @@ class FrameRecorder:
             if record.container:
                 record.container.close()
                 record.container = None
+            self.emit(self.track_removed, track_id)
+        self.emit(self.recorder_stopped)
 
 
     async def __run_track(self, record: StreamContext):
@@ -121,6 +157,7 @@ class FrameRecorder:
             try:
                 frame = await record.track.recv()
             except MediaStreamError:
+                logger.exception(f"Recorder track {record.track.trid} ended")
                 return
 
             if not record.context.started:
@@ -132,4 +169,11 @@ class FrameRecorder:
 
             for packet in record.context.stream.encode(frame):
                 record.container.mux(packet)
+
+    def start_recording(self, track_id: LK.TrackId):
+        # FIXME: this should set a flag giving the start signal for recording
+        # This comes from a StreamStateUpdate message with an ACTIVE state
+        # that should come after the answer is sent
+        logger.debug(f"Starting recording of track {track_id}")
+        pass
 
