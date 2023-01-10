@@ -25,6 +25,7 @@ class StreamContext:
     track: MediaStreamTrack
     context: MediaRecorderContext
     container: av.container.OutputContainer
+    can_start: bool = False
 
 tracks = {}
 
@@ -46,7 +47,7 @@ class FrameRecorder(AsyncIOEventEmitter):
     :param path: The path to a file, or a file-like object.
     :param options: Additional options to pass to FFmpeg.
     """
-    containers: List[StreamContext]
+    tracks: Dict[LK.TrackId, StreamContext]
 
     track_added = "track_added"
     track_removed = "track_removed"
@@ -55,7 +56,7 @@ class FrameRecorder(AsyncIOEventEmitter):
     def __init__(self, path):
         super().__init__()
         self.path = path
-        self.containers = []
+        self.tracks = {}
 
 
     async def addTrack(self, track: MediaStreamTrack):
@@ -101,7 +102,7 @@ class FrameRecorder(AsyncIOEventEmitter):
 
             context = MediaRecorderContext(stream)
             record = StreamContext(track=track, context=context, container=container)
-            self.containers.append(record)
+            self.tracks[track_id] = record
 
             # start the recording
             record.context.task = asyncio.ensure_future(self.__run_track(record))
@@ -136,8 +137,7 @@ class FrameRecorder(AsyncIOEventEmitter):
         """
         Stop recording.
         """
-        for record in self.containers:
-            track_id = record.track.trid
+        for track_id, record in tracks.items():
             record.track.stop()
             if record.context.task is not None:
                 record.context.task.cancel()
@@ -159,6 +159,12 @@ class FrameRecorder(AsyncIOEventEmitter):
             except MediaStreamError:
                 logger.exception(f"Recorder track {record.track.trid} ended")
                 return
+            except:
+                logger.exception(f"Recorder track {record.track.trid} ended")
+                return
+
+            if record.can_start is False:
+                continue
 
             if not record.context.started:
                 # adjust the output size to match the first frame
@@ -171,9 +177,7 @@ class FrameRecorder(AsyncIOEventEmitter):
                 record.container.mux(packet)
 
     def start_recording(self, track_id: LK.TrackId):
-        # FIXME: this should set a flag giving the start signal for recording
-        # This comes from a StreamStateUpdate message with an ACTIVE state
-        # that should come after the answer is sent
         logger.debug(f"Starting recording of track {track_id}")
+        self.tracks[track_id].can_start = True
         pass
 

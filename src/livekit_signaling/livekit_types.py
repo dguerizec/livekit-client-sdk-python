@@ -1856,7 +1856,7 @@ class Pong(LKBase):
     time: Time
 
     @classmethod
-    def from_lk(cls, pong: int) -> "Ping":
+    def from_lk(cls, pong: int) -> "Pong":
         return cls(
             time=Time(pong),
         )
@@ -1881,7 +1881,6 @@ class RefreshToken(LKBase):
 
 
 map_signal_response_to_class = {}
-
 map_signal_request_to_class = {}
 
 
@@ -1889,10 +1888,8 @@ def init_maps():
     global map_signal_response_to_class
     global map_signal_request_to_class
 
-    print(sys.modules[__name__].__dir__())
     for classname in sys.modules[__name__].__dir__():
         klass = getattr(sys.modules[__name__], classname)
-        print(f"found class {classname} of type {type(klass)}")
         if hasattr(klass, "__signal_request__"):
             if isinstance(klass.__signal_request__, List):
                 for request in klass.__signal_request__:

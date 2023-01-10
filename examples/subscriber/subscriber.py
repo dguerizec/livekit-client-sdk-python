@@ -291,7 +291,7 @@ async def run(recorder: FrameRecorder, signaling: Signaling):
     # DEBUG
     @signaling.on_recv("all_messages")
     async def on_all_messages(event: str, message: LK.LKBase):
-        handled = ["join", "offer", "trickle", "update"]
+        handled = ["join", "offer", "trickle", "update", "stream_state_update"]
         if event in handled:
             return
         logger.debug(f"Received unhandled {event} message from livekit: {type(message)}")
