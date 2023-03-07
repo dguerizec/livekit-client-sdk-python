@@ -4,32 +4,54 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Tuple
+from typing import Any, Coroutine
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
-from aiortc.contrib.media import MediaPlayer, MediaBlackhole
+from aiortc import RTCSessionDescription  # type: ignore
+from player import VideoPlayer
 
-from livekit_signaling import Signaling, lkrtc
-from livekit_signaling.utils import wintolin, create_pc, PeerConnectionEvents
+from livekit_signaling import LK, Signaling
+from livekit_signaling.utils import PeerConnectionEvents, create_pc, wintolin
 
 logger = logging.getLogger("livekit-publisher")
 
+from aiortc.rtcdatachannel import logger as chan_logger
+from aiortc.rtcdtlstransport import logger as dtls_logger
+from aiortc.rtcicetransport import logger as ice_logger
+from aiortc.rtcpeerconnection import logger as pc_logger
+from aiortc.rtcrtpreceiver import logger as rtp_receiver_logger
+from aiortc.rtcrtpsender import logger as rtp_sender_logger
+from aiortc.rtcrtptransceiver import logger as rtp_logger
+from aiortc.rtcsctptransport import logger as sctp_logger
+
+loggers = {
+    "chan": chan_logger,
+    "dtls": dtls_logger,
+    "ice": ice_logger,
+    "pc": pc_logger,
+    "rtp": rtp_logger,
+    "rtp.receiver": rtp_receiver_logger,
+    "rtp.sender": rtp_sender_logger,
+    "sctp": sctp_logger,
+    "sig": logging.getLogger("livekit-signaling"),
+    "app": logging.getLogger("livekit-publisher"),
+    "sub": logging.getLogger("livekit-publisher-sub"),
+    "pub": logging.getLogger("livekit-publisher-pub"),
+    "rec": logging.getLogger("livekit-recorder"),
+}
 
 
-async def run(player: MediaPlayer, signaling: Signaling):
-    recorder = MediaBlackhole()
-
-    sub_logger = logging.getLogger("livekit-subscriber-sub")
+async def run(player: VideoPlayer, signaling: Signaling) -> None:
+    sub_logger = logging.getLogger("livekit-publisher-sub")
     sub_events = PeerConnectionEvents(sub_logger)
     sub = create_pc(events=sub_events)
 
-    pub_logger = logging.getLogger("livekit-subscriber-pub")
+    pub_logger = logging.getLogger("livekit-publisher-pub")
     pub_events = PeerConnectionEvents(pub_logger)
     pub = create_pc(events=pub_events)
 
     pub.addTransceiver("video", direction="sendonly")
 
-    async def add_tracks():
+    async def add_tracks() -> None:
         if player and player.audio:
             logger.debug(f"Ignoring audio track")
 
@@ -40,29 +62,27 @@ async def run(player: MediaPlayer, signaling: Signaling):
             # FIXME: should video be started from here ? how ?
             # player._start(player.video)
 
-    @sub.on("track")
-    def on_track(track):
-        # do we need to read track and redirect to black hole ?
-        recorder.addTrack(track)
-
-    async def send_answer():
+    async def send_answer() -> bool:
         ans = await sub.createAnswer()
         try:
             await sub.setLocalDescription(ans)
         except:
-            logger.exception(f"ERROR: Cannot set local description with answer:\n{wintolin(ans.sdp)}")
+            logger.exception(
+                f"ERROR: Cannot set local description with answer:\n{wintolin(ans.sdp)}"
+            )
             return False
 
         local_desc = sub.localDescription
 
+        logger.debug(f"Sending ANSWER:\n{wintolin(local_desc.sdp)}")
         await signaling.send_answer(local_desc)
 
         return True
 
-    async def send_offer():
-        #try:
+    async def send_offer() -> bool:
+        # try:
         #    await add_tracks()
-        #except:
+        # except:
         #    logger.exception(f"ERROR: Cannot add tracks")
         #    return False
         await signaling.send_add_track(player.video)
@@ -71,7 +91,9 @@ async def run(player: MediaPlayer, signaling: Signaling):
         try:
             await pub.setLocalDescription(offer)
         except Exception as e:
-            logger.exception(f"ERROR: Cannot set local description with offer:\n{wintolin(offer.sdp)}")
+            logger.exception(
+                f"ERROR: Cannot set local description with offer:\n{wintolin(offer.sdp)}"
+            )
             return False
 
         local_desc = pub.localDescription
@@ -79,59 +101,75 @@ async def run(player: MediaPlayer, signaling: Signaling):
 
         return True
 
-    @signaling.on_recv("join")
-    async def on_join(join: lkrtc.JoinResponse):
+    @signaling.on_recv("join")  # type: ignore
+    async def on_join(join: LK.JoinResponse) -> None:
         logger.debug(f"Received join")
 
-    @signaling.on_recv("offer")
-    async def on_offer(offer: RTCSessionDescription):
-        logger.debug(f"Received offer:\n{wintolin(offer.sdp)}")
+    @signaling.on_recv("offer")  # type: ignore
+    async def on_offer(offer: RTCSessionDescription) -> None:
+        logger.debug(f"Received OFFER:\n{wintolin(offer.sdp)}")
         await sub.setRemoteDescription(offer)
         await send_answer()
 
-    @signaling.on_sent("answer")
-    async def on_answer_sent(answer: RTCSessionDescription):
+    @signaling.on_sent("answer")  # type: ignore
+    async def on_answer_sent(answer: RTCSessionDescription) -> None:
         await signaling.send_subscription_permission()
 
-    @signaling.on_sent("subscription_permission")
-    async def on_subscription_permission_sent(subscription_permission: lkrtc.SubscriptionPermission):
+    @signaling.on_sent("subscription_permission")  # type: ignore
+    async def on_subscription_permission_sent(
+        subscription_permission: LK.SubscriptionPermission,
+    ) -> None:
         await send_offer()
 
-    @signaling.on_recv("answer")
-    async def on_answer(answer: RTCSessionDescription):
+    @signaling.on_recv("answer")  # type: ignore
+    async def on_answer(answer: RTCSessionDescription) -> None:
         logger.debug(f"PLAYER: RECEIVED ANSWER:\n{wintolin(answer.sdp)}")
         await pub.setRemoteDescription(answer)
 
-    @signaling.on_recv("track_published")
-    async def on_track_published(track: lkrtc.TrackPublishedResponse):
+    @signaling.on_recv("track_published")  # type: ignore
+    async def on_track_published(track: LK.TrackPublishedResponse) -> None:
         logger.debug("PLAYER: Track published")
         logger.debug(track)
 
-    @signaling.on_recv("trickle")
-    async def on_trickle(trickle: Tuple[RTCIceCandidate, str]):
-        candidate, target = trickle
-        logger.debug(f"Trickle: add subscriber candidate with {target}")
+    @signaling.on_recv("trickle")  # type: ignore
+    async def on_trickle(trickle: LK.TrickleRequest) -> None:
+        logger.debug(f"Trickle: add publisher candidate with {trickle.target}")
         logger.debug(trickle)
-        await sub.addIceCandidate(candidate)
+        await sub.addIceCandidate(trickle.candidate)
 
-    @signaling.on_sent("offer")
-    async def on_send_offer(offer: RTCSessionDescription):
-        logger.debug(f"Sent offer:\n{wintolin(offer.sdp)}")
+    @signaling.on_sent("offer")  # type: ignore
+    async def on_send_offer(offer: RTCSessionDescription) -> None:
+        logger.debug(f"Sent OFFER:\n{wintolin(offer.sdp)}")
         await add_tracks()
 
-    @signaling.on_recv("all_messages")
-    async def on_all_messages(message: lkrtc.SignalResponse):
+    @signaling.on_recv("all_messages")  # type: ignore
+    async def on_all_messages(event: str, message: LK.LKBase) -> None:
+        handled = ["offer", "answer", "trickle", "track_published"]
+        if event in handled:
+            return
         logger.debug(f"Received message from livekit:{type(message)}")
         logger.debug(message)
 
-    # connect signaling
-    ok = await signaling.connect(sdk="js")
+    @player.on(VideoPlayer.started)
+    async def on_player_started() -> None:
+        logger.debug("PLAYER: started")
+        # await add_tracks()
 
-    if not ok:
-        logger.error("Cannot connect to signaling")
-        return
+    @player.on(VideoPlayer.ended)
+    async def on_player_ended() -> None:
+        logger.debug("PLAYER: ended")
 
-    await signaling.run()
+    # connect and run signaling
+    await signaling.run(sdk="go")
+
+
+async def run_wrapper(player: VideoPlayer, signaling: Signaling) -> None:
+    try:
+        await run(player, signaling)
+    finally:
+        logger.error(f"Exiting")
+        # await player.stop()
+        await signaling.close()
 
 
 if __name__ == "__main__":
@@ -143,48 +181,65 @@ if __name__ == "__main__":
     identity = f"pypub-{os.getppid()}"
 
     parser = argparse.ArgumentParser(description="Video stream from the command line")
-    parser.add_argument("file", help="Read the media from the file and sent it.")
+    parser.add_argument(
+        "file",
+        help="Read the media from the file and sent it.",
+        default=None,
+        nargs="?",
+    )
     parser.add_argument("--host", "-H", help="Livekit host", default=host)
     parser.add_argument("--port", "-p", help="Livekit host port", default=port)
     parser.add_argument("--api-key", "-k", help="Livekit API key", default=api_key)
-    parser.add_argument("--api-secret", "-s", help="Livekit API secret", default=api_secret)
+    parser.add_argument(
+        "--api-secret", "-s", help="Livekit API secret", default=api_secret
+    )
     parser.add_argument("--room", "-r", help="Livekit room name", default=room)
     parser.add_argument("--identity", "-i", help="Livekit identity", default=identity)
-    parser.add_argument("--verbose", "-v", action="count")
-    parser.add_argument("--verbose-signaling", "-V", action="count")
+    parser.add_argument("--log", "-l", action="append", help="Log DEBUG module")
+    parser.add_argument(
+        "--list-log-modules", "-L", action="count", help="List module names"
+    )
     args = parser.parse_args()
 
+    if args.list_log_modules:
+        print("-l " + " -l ".join(loggers.keys()))
+        sys.exit(0)
+
+    if not args.file:
+        parser.error("Missing input video file")
+
     ch = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
     ch.setFormatter(formatter)
 
     logger.addHandler(ch)
 
-    print("ARGS=", args)
-
     # create signaling
-    signaling = Signaling(args.host, args.port, args.room, args.api_key, args.api_secret, args.identity)
+    signaling = Signaling(
+        args.host, args.port, args.room, args.api_key, args.api_secret, args.identity
+    )
     signaling.logger.addHandler(ch)
 
-    if args.verbose:
-        logger.setLevel(logging.DEBUG)
-
-        if args.verbose > 1:
-            logging.basicConfig(level=logging.DEBUG)
-
-    if args.verbose_signaling:
-        signaling.set_log_level(logging.DEBUG)
+    if args.log:
+        for m in args.log:
+            loggers[m].addHandler(ch)
+            loggers[m].setLevel(logging.DEBUG)
 
     logger.info(f"Reading from file: {args.file}")
-    player = MediaPlayer(args.file, loop=True)
+    player = VideoPlayer(args.file, loop=True)
 
     try:
-        result = asyncio.run(run(
+        result: Any = asyncio.run(
+            run_wrapper(
                 player=player,
                 signaling=signaling,
-            ))
+            )
+        )
     except KeyboardInterrupt:
         logger.debug("Exiting")
+    except:
+        logger.exception(f"ERROR:")
     finally:
-        # cleanup
-        asyncio.run(signaling.close())
+        logger.debug("Exiting")

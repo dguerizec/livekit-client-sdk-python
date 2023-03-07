@@ -1,17 +1,18 @@
 # Wrapper classes to avoid protobuf weirdness in client apps
-import logging
-import sys
-import enum
+from __future__ import annotations
 
+import enum
+import sys
 from dataclasses import dataclass
-from typing import NewType, List
+from typing import Any, List, NewType, Optional
 
 import aiortc
-from aiortc import RTCIceCandidate  # type: ignore
+from aiortc import RTCIceCandidate
 
-from .livekit_protobuf_defs import lkrtc  # type: ignore
-from .livekit_protobuf_defs import lkmodels
-from .utils import proto_to_aio_candidate, aio_to_proto_candidate
+from .livekit_protobuf_defs import lkmodels, lkrtc
+from .utils import aio_to_proto_candidate, proto_to_aio_candidate
+
+LKAny = Any
 
 Time = NewType("Time", int)
 Token = NewType("Token", str)
@@ -20,29 +21,29 @@ TrackId = NewType("TrackId", str)
 
 
 class LKEnum(enum.Enum):
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
 
     @classmethod
-    def from_lk(cls, pb):
+    def from_lk(cls, pb: LKAny) -> LKEnum:
         raise NotImplementedError()
 
-    def to_lk(self):
+    def to_lk(self) -> LKAny:
         raise NotImplementedError()
 
 
-def ind(indent):
+def ind(indent: int) -> str:
     return f"{indent:2d}" + " " * indent
 
 
 class LKBase:
-    def __str__(self):
+    def __str__(self) -> str:
         return self.__dump__()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__dump__()
 
-    def __dump__(self, indent=""):
+    def __dump__(self, indent: str = "") -> str:
         if indent == "":
             s = ["\nXXXXX " + self.__class__.__name__ + ":"]
             indent = "    "
@@ -71,43 +72,45 @@ class LKBase:
         return f"\n".join(s)
 
     @classmethod
-    def from_lk(cls, pb):
+    def from_lk(cls, pb: LKAny) -> LKBase:
         raise NotImplementedError()
 
-    def to_lk(self):
+    def to_lk(self) -> LKAny:
         raise NotImplementedError()
 
-    def to_signal_request(self):
-        msg = getattr(self, '__signal_request__', None)
+    def to_signal_request(self) -> lkrtc.SignalRequest:
+        msg = getattr(self, "__signal_request__", None)
         if msg is None:
             raise Exception(f"Cannot convert {self.__class__} to SignalRequest")
         req = lkrtc.SignalRequest(**{msg: self.to_lk()})
         return req
 
     @classmethod
-    def from_signal_response(cls, response: lkrtc.SignalResponse):
-        msg = getattr(cls, '__signal_response__', None)
+    def from_signal_response(cls, response: lkrtc.SignalResponse) -> LKBase:
+        msg = getattr(cls, "__signal_response__", None)
         if msg is None:
             print(dir(cls))
-            raise Exception(f"Cannot convert {type(response)} to {cls.__class__}: {response}")
+            raise Exception(
+                f"Cannot convert {type(response)} to {cls.__class__}: {response}"
+            )
         if response.WhichOneof("message") != msg:
             raise Exception(f"SignalResponse is not {msg}")
         return cls.from_lk(getattr(response, msg))
 
     @classmethod
-    def from_signal_request(cls, request: lkrtc.SignalRequest):
-        msg = getattr(cls, '__signal_request__', None)
+    def from_signal_request(cls, request: lkrtc.SignalRequest) -> LKBase:
+        msg = getattr(cls, "__signal_request__", None)
         if msg is None:
             raise Exception(f"Cannot convert {type(request)} to {cls.__class__}")
         if request.WhichOneof("message") != msg:
             raise Exception(f"SignalRequest is not {msg}")
         return cls.from_lk(getattr(request, msg))
 
-    def get_response_name(self):
-        return getattr(self, '__signal_response__', None)
+    def get_response_name(self) -> Optional[str]:
+        return getattr(self, "__signal_response__", None)
 
-    def get_request_name(self):
-        return getattr(self, '__signal_request__', None)
+    def get_request_name(self) -> Optional[str]:
+        return getattr(self, "__signal_request__", None)
 
 
 class ParticipantInfoState(LKEnum):
@@ -117,7 +120,7 @@ class ParticipantInfoState(LKEnum):
     DISCONNECTED = enum.auto()
 
     @classmethod
-    def from_lk(cls, state: lkmodels.ParticipantInfo.State) -> "ParticipantInfoState":
+    def from_lk(cls, state: lkmodels.ParticipantInfo.State) -> ParticipantInfoState:
         if state == lkmodels.ParticipantInfo.State.JOINING:
             return cls.JOINING
         elif state == lkmodels.ParticipantInfo.State.JOINED:
@@ -143,12 +146,12 @@ class ParticipantInfoState(LKEnum):
 
 
 class TrackType(LKEnum):
-    AUDIO = enum.auto()
-    VIDEO = enum.auto()
-    DATA = enum.auto()
+    AUDIO = "audio"
+    VIDEO = "video"
+    DATA = "data"
 
     @classmethod
-    def from_lk(cls, track_type: lkmodels.TrackType) -> "TrackType":
+    def from_lk(cls, track_type: lkmodels.TrackType) -> TrackType:
         if track_type == lkmodels.TrackType.AUDIO:
             return cls.AUDIO
         elif track_type == lkmodels.TrackType.VIDEO:
@@ -159,14 +162,14 @@ class TrackType(LKEnum):
             raise ValueError(f"Unknown TrackType: {track_type}")
 
     def to_lk(self) -> lkmodels.TrackType:
-        if self == self.AUDIO:
+        if self.value == self.AUDIO:
             return lkmodels.TrackType.AUDIO
-        elif self == self.VIDEO:
+        elif self.value == self.VIDEO:
             return lkmodels.TrackType.VIDEO
-        elif self == self.DATA:
+        elif self.value == self.DATA:
             return lkmodels.TrackType.DATA
         else:
-            raise ValueError(f"Unknown TrackType: {self}")
+            raise ValueError(f"Unknown TrackType: {self.value}")
 
 
 @dataclass
@@ -178,6 +181,7 @@ class TrackSource(LKEnum):
     SCREEN_SHARE = 3;
     SCREEN_SHARE_AUDIO = 4;
     """
+
     NONE = enum.auto()
     UNKNOWN = enum.auto()
     CAMERA = enum.auto()
@@ -186,7 +190,7 @@ class TrackSource(LKEnum):
     SCREEN_SHARE_AUDIO = enum.auto()
 
     @classmethod
-    def from_lk(cls, source: lkmodels.TrackSource) -> "TrackSource":
+    def from_lk(cls, source: lkmodels.TrackSource) -> TrackSource:
         if source == lkmodels.TrackSource.UNKNOWN:
             return cls.UNKNOWN
         elif source == lkmodels.TrackSource.CAMERA:
@@ -201,18 +205,18 @@ class TrackSource(LKEnum):
             raise ValueError(f"Unknown TrackSource: {source}")
 
     def to_lk(self) -> lkmodels.TrackSource:
-        if self == self.UNKNOWN:
+        if self.value == self.UNKNOWN:
             return lkmodels.TrackSource.UNKNOWN
-        elif self == self.CAMERA:
+        elif self.value == self.CAMERA:
             return lkmodels.TrackSource.CAMERA
-        elif self == self.MICROPHONE:
+        elif self.value == self.MICROPHONE:
             return lkmodels.TrackSource.MICROPHONE
-        elif self == self.SCREEN_SHARE:
+        elif self.value == self.SCREEN_SHARE:
             return lkmodels.TrackSource.SCREEN_SHARE
-        elif self == self.SCREEN_SHARE_AUDIO:
+        elif self.value == self.SCREEN_SHARE_AUDIO:
             return lkmodels.TrackSource.SCREEN_SHARE_AUDIO
         else:
-            raise ValueError(f"Unknown TrackSource: {self}")
+            raise ValueError(f"Unknown TrackSource: {self.value}")
 
 
 class VideoQuality(LKEnum):
@@ -222,6 +226,7 @@ class VideoQuality(LKEnum):
     HIGH = 2;
     OFF = 3;
     """
+
     NONE = enum.auto()
     LOW = enum.auto()
     MEDIUM = enum.auto()
@@ -229,7 +234,7 @@ class VideoQuality(LKEnum):
     OFF = enum.auto()
 
     @classmethod
-    def from_lk(cls, layer: lkmodels.VideoQuality) -> "VideoQuality":
+    def from_lk(cls, layer: lkmodels.VideoQuality) -> VideoQuality:
         if layer == lkmodels.VideoQuality.LOW:
             return cls.LOW
         elif layer == lkmodels.VideoQuality.MEDIUM:
@@ -242,16 +247,16 @@ class VideoQuality(LKEnum):
             raise ValueError(f"Unknown VideoQuality: {layer}")
 
     def to_lk(self) -> lkmodels.VideoQuality:
-        if self == self.LOW:
+        if self.value == self.LOW:
             return lkmodels.VideoQuality.LOW
-        elif self == self.MEDIUM:
+        elif self.value == self.MEDIUM:
             return lkmodels.VideoQuality.MEDIUM
-        elif self == self.HIGH:
+        elif self.value == self.HIGH:
             return lkmodels.VideoQuality.HIGH
-        elif self == self.OFF:
+        elif self.value == self.OFF:
             return lkmodels.VideoQuality.OFF
         else:
-            raise ValueError(f"Unknown VideoQuality: {self}")
+            raise ValueError(f"Unknown VideoQuality: {self.value}")
 
 
 @dataclass
@@ -265,14 +270,15 @@ class VideoLayer(LKBase):
     uint32 bitrate = 4;
     uint32 ssrc = 5;
     """
+
     quality: VideoQuality
     width: int
     height: int
     bitrate: int
-    ssrc: int
+    ssrc: Optional[int]
 
     @classmethod
-    def from_lk(cls, layer: lkmodels.VideoLayer) -> "VideoLayer":
+    def from_lk(cls, layer: lkmodels.VideoLayer) -> VideoLayer:
         return cls(
             VideoQuality.from_lk(layer.quality),
             layer.width,
@@ -299,13 +305,14 @@ class SimulcastCodecInfo(LKBase):
     string cid = 3;
     repeated VideoLayer layers = 4;
     """
+
     mime_type: str
     mid: str
     cid: str
     layers: List[VideoLayer]
 
     @classmethod
-    def from_lk(cls, codec: lkmodels.SimulcastCodecInfo) -> "SimulcastCodecInfo":
+    def from_lk(cls, codec: lkmodels.SimulcastCodecInfo) -> SimulcastCodecInfo:
         return cls(
             codec.mime_type,
             codec.mid,
@@ -350,7 +357,7 @@ class TrackInfo(LKBase):
     bool disable_red = 15;
     """
 
-    sid: str
+    sid: TrackId
     type: TrackType
     name: str
     muted: bool
@@ -367,7 +374,7 @@ class TrackInfo(LKBase):
     disable_red: bool
 
     @classmethod
-    def from_lk(cls, track_info: lkmodels.TrackInfo) -> "TrackInfo":
+    def from_lk(cls, track_info: lkmodels.TrackInfo) -> TrackInfo:
         return cls(
             sid=track_info.sid,
             type=TrackType.from_lk(track_info.type),
@@ -420,6 +427,7 @@ class ParticipantPermission(LKBase):
     // indicates it's a recorder instance
     bool recorder = 8;
     """
+
     can_subscribe: bool
     can_publish: bool
     can_publish_data: bool
@@ -427,7 +435,7 @@ class ParticipantPermission(LKBase):
     recorder: bool
 
     @classmethod
-    def from_lk(cls, perm: lkmodels.ParticipantPermission) -> "ParticipantPermission":
+    def from_lk(cls, perm: lkmodels.ParticipantPermission) -> ParticipantPermission:
         return cls(
             can_subscribe=perm.can_subscribe,
             can_publish=perm.can_publish,
@@ -475,7 +483,8 @@ class ParticipantInfo(LKBase):
     bool is_publisher = 13;
 
     """
-    sid: str
+
+    sid: ParticipantId
     identity: str
     state: ParticipantInfoState
     tracks: List["TrackInfo"]
@@ -488,7 +497,7 @@ class ParticipantInfo(LKBase):
     is_publisher: bool
 
     @classmethod
-    def from_lk(cls, info: lkmodels.ParticipantInfo) -> "ParticipantInfo":
+    def from_lk(cls, info: lkmodels.ParticipantInfo) -> ParticipantInfo:
         return cls(
             sid=info.sid,
             identity=info.identity,
@@ -525,11 +534,12 @@ class Codec(LKBase):
     string mime = 1;
     string fmtp_line = 2;
     """
+
     mime: str
     fmtp_line: str
 
     @classmethod
-    def from_lk(cls, codec: lkmodels.Codec) -> "Codec":
+    def from_lk(cls, codec: lkmodels.Codec) -> Codec:
         return cls(
             mime=codec.mime,
             fmtp_line=codec.fmtp_line,
@@ -556,6 +566,7 @@ class Room(LKBase):
     uint32 num_participants = 9;
     bool active_recording = 10;
     """
+
     sid: str
     name: str
     empty_timeout: int
@@ -568,7 +579,7 @@ class Room(LKBase):
     active_recording: bool
 
     @classmethod
-    def from_lk(cls, room: lkmodels.Room) -> "Room":
+    def from_lk(cls, room: lkmodels.Room) -> Room:
         return cls(
             sid=room.sid,
             name=room.name,
@@ -604,12 +615,13 @@ class ICEServer(LKBase):
     string username = 2;
     string credential = 3;
     """
+
     urls: List[str]
     username: str
     credential: str
 
     @classmethod
-    def from_lk(cls, ice: lkrtc.ICEServer) -> "ICEServer":
+    def from_lk(cls, ice: lkrtc.ICEServer) -> ICEServer:
         return cls(
             urls=[url for url in ice.urls],
             username=ice.username,
@@ -630,12 +642,13 @@ class ClientConfigSetting(LKEnum):
     DISABLED = 1;
     ENABLED = 2;
     """
+
     UNSET = enum.auto()
     DISABLED = enum.auto()
     ENABLED = enum.auto()
 
     @classmethod
-    def from_lk(cls, setting: lkmodels.ClientConfigSetting) -> "ClientConfigSetting":
+    def from_lk(cls, setting: lkmodels.ClientConfigSetting) -> ClientConfigSetting:
         if setting == lkmodels.ClientConfigSetting.UNSET:
             return cls.UNSET
         elif setting == lkmodels.ClientConfigSetting.DISABLED:
@@ -646,14 +659,14 @@ class ClientConfigSetting(LKEnum):
             raise ValueError(f"Unknown ClientConfigSetting: {setting}")
 
     def to_lk(self) -> lkmodels.ClientConfigSetting:
-        if self == self.UNSET:
+        if self.value == self.UNSET:
             return lkmodels.ClientConfigSetting.UNSET
-        elif self == self.DISABLED:
+        elif self.value == self.DISABLED:
             return lkmodels.ClientConfigSetting.DISABLED
-        elif self == self.ENABLED:
+        elif self.value == self.ENABLED:
             return lkmodels.ClientConfigSetting.ENABLED
         else:
-            raise ValueError(f"Unknown ClientConfigSetting: {self}")
+            raise ValueError(f"Unknown ClientConfigSetting: {self.value}")
 
 
 @dataclass
@@ -661,10 +674,11 @@ class VideoConfiguration(LKBase):
     """
     ClientConfigSetting hardware_encoder = 1;
     """
+
     hardware_encoder: ClientConfigSetting
 
     @classmethod
-    def from_lk(cls, config: lkmodels.VideoConfiguration) -> "VideoConfiguration":
+    def from_lk(cls, config: lkmodels.VideoConfiguration) -> VideoConfiguration:
         return cls(
             hardware_encoder=ClientConfigSetting.from_lk(config.hardware_encoder),
         )
@@ -680,10 +694,11 @@ class DisabledCodecs(LKBase):
     """
     repeated Codec codecs = 1;
     """
+
     codecs: List[Codec]
 
     @classmethod
-    def from_lk(cls, disabled_codecs: lkmodels.DisabledCodecs) -> "DisabledCodecs":
+    def from_lk(cls, disabled_codecs: lkmodels.DisabledCodecs) -> DisabledCodecs:
         return cls(
             codecs=[Codec.from_lk(c) for c in disabled_codecs.codecs],
         )
@@ -704,6 +719,7 @@ class ClientConfiguration(LKBase):
     DisabledCodecs disabled_codecs = 4;
     ClientConfigSetting force_relay = 5;
     """
+
     video: VideoConfiguration
     screen: VideoConfiguration
     resume_connection: ClientConfigSetting
@@ -711,7 +727,7 @@ class ClientConfiguration(LKBase):
     force_relay: ClientConfigSetting
 
     @classmethod
-    def from_lk(cls, config: lkmodels.ClientConfiguration) -> "ClientConfiguration":
+    def from_lk(cls, config: lkmodels.ClientConfiguration) -> ClientConfiguration:
         return cls(
             video=VideoConfiguration.from_lk(config.video),
             screen=VideoConfiguration.from_lk(config.screen),
@@ -735,12 +751,13 @@ class ServerInfoEdition(LKEnum):
     Standard = 0;
     Cloud = 1;
     """
+
     NONE = enum.auto()
     STANDARD = enum.auto()
     CLOUD = enum.auto()
 
     @classmethod
-    def from_lk(cls, edition: lkmodels.ServerInfo.Edition) -> "ServerInfoEdition":
+    def from_lk(cls, edition: lkmodels.ServerInfo.Edition) -> ServerInfoEdition:
         if edition == lkmodels.ServerInfo.Edition.Standard:
             return cls.STANDARD
         elif edition == lkmodels.ServerInfo.Edition.Cloud:
@@ -749,12 +766,12 @@ class ServerInfoEdition(LKEnum):
             raise ValueError(f"Unknown ServerInfo_Edition: {edition}")
 
     def to_lk(self) -> lkmodels.ServerInfo.Edition:
-        if self == self.STANDARD:
+        if self.value == self.STANDARD:
             return lkmodels.ServerInfo.Edition.Standard
-        elif self == self.CLOUD:
+        elif self.value == self.CLOUD:
             return lkmodels.ServerInfo.Edition.Cloud
         else:
-            raise ValueError(f"Unknown ServerInfo_Edition: {self}")
+            raise ValueError(f"Unknown ServerInfo_Edition: {self.value}")
 
 
 @dataclass
@@ -772,6 +789,7 @@ class ServerInfo(LKBase):
     // additional debugging information. sent only if server is in development mode
     string debug_info = 6;
     """
+
     edition: ServerInfoEdition
     version: str
     protocol: int
@@ -780,7 +798,7 @@ class ServerInfo(LKBase):
     debug_info: str
 
     @classmethod
-    def from_lk(cls, info: lkmodels.ServerInfo) -> "ServerInfo":
+    def from_lk(cls, info: lkmodels.ServerInfo) -> ServerInfo:
         return cls(
             edition=ServerInfoEdition.from_lk(info.edition),
             version=info.version,
@@ -839,11 +857,13 @@ class JoinResponse(LKBase):
     server_info: ServerInfo
 
     @classmethod
-    def from_lk(cls, resp: lkrtc.JoinResponse) -> "JoinResponse":
+    def from_lk(cls, resp: lkrtc.JoinResponse) -> JoinResponse:
         return cls(
             room=Room.from_lk(resp.room),
             participant=ParticipantInfo.from_lk(resp.participant),
-            other_participants=[ParticipantInfo.from_lk(p) for p in resp.other_participants],
+            other_participants=[
+                ParticipantInfo.from_lk(p) for p in resp.other_participants
+            ],
             server_version=resp.server_version,
             ice_servers=[ICEServer.from_lk(i) for i in resp.ice_servers],
             subscriber_primary=resp.subscriber_primary,
@@ -855,7 +875,7 @@ class JoinResponse(LKBase):
             server_info=ServerInfo.from_lk(resp.server_info),
         )
 
-    def to_lk(self):
+    def to_lk(self) -> lkrtc.JoinResponse:
         return lkrtc.JoinResponse(
             room=self.room.to_lk(),
             participant=self.participant.to_lk(),
@@ -878,12 +898,13 @@ class SignalTarget(LKEnum):
     PUBLISHER = 0;
     SUBSCRIBER = 1;
     """
+
     NONE = enum.auto()
     PUBLISHER = enum.auto()
     SUBSCRIBER = enum.auto()
 
     @classmethod
-    def from_lk(cls, target: lkrtc.SignalTarget) -> "SignalTarget":
+    def from_lk(cls, target: lkrtc.SignalTarget) -> SignalTarget:
         if target == lkrtc.SignalTarget.PUBLISHER:
             return cls.PUBLISHER
         elif target == lkrtc.SignalTarget.SUBSCRIBER:
@@ -892,12 +913,12 @@ class SignalTarget(LKEnum):
             raise ValueError(f"Unknown SignalTarget: {target}")
 
     def to_lk(self) -> lkrtc.SignalTarget:
-        if self == self.PUBLISHER:
+        if self.value == self.PUBLISHER:
             return lkrtc.SignalTarget.PUBLISHER
-        elif self == self.SUBSCRIBER:
+        elif self.value == self.SUBSCRIBER:
             return lkrtc.SignalTarget.SUBSCRIBER
         else:
-            raise ValueError(f"Unknown SignalTarget: {self}")
+            raise ValueError(f"Unknown SignalTarget: {self.value}")
 
 
 @dataclass
@@ -912,7 +933,7 @@ class TrickleRequest(LKBase):
     target: SignalTarget
 
     @classmethod
-    def from_lk(cls, req: lkrtc.TrickleRequest) -> "TrickleRequest":
+    def from_lk(cls, req: lkrtc.TrickleRequest) -> TrickleRequest:
         candidate = proto_to_aio_candidate(req.candidateInit)
         return cls(
             candidate=candidate,
@@ -939,7 +960,7 @@ class MuteTrackRequest(LKBase):
     muted: bool
 
     @classmethod
-    def from_lk(cls, req: lkrtc.MuteTrackRequest) -> "MuteTrackRequest":
+    def from_lk(cls, req: lkrtc.MuteTrackRequest) -> MuteTrackRequest:
         return cls(
             sid=req.sid,
             muted=req.muted,
@@ -961,7 +982,7 @@ class ParticipantUpdate(LKBase):
     participants: List[ParticipantInfo]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.ParticipantUpdate) -> "ParticipantUpdate":
+    def from_lk(cls, update: lkrtc.ParticipantUpdate) -> ParticipantUpdate:
         return cls(
             participants=[ParticipantInfo.from_lk(p) for p in update.participants],
         )
@@ -973,7 +994,7 @@ class ParticipantUpdate(LKBase):
 
 
 @dataclass
-class TrackPublishedResponse:
+class TrackPublishedResponse(LKBase):
     __signal_response__ = "track_published"
     """
     string cid = 1;
@@ -983,7 +1004,7 @@ class TrackPublishedResponse:
     track: TrackInfo
 
     @classmethod
-    def from_lk(cls, resp: lkrtc.TrackPublishedResponse) -> "TrackPublishedResponse":
+    def from_lk(cls, resp: lkrtc.TrackPublishedResponse) -> TrackPublishedResponse:
         return cls(
             cid=resp.cid,
             track=TrackInfo.from_lk(resp.track),
@@ -1007,6 +1028,7 @@ class DisconnectReason(LKEnum):
     STATE_MISMATCH = 6;
     JOIN_FAILURE = 7;
     """
+
     UNKNOWN_REASON = enum.auto()
     CLIENT_INITIATED = enum.auto()
     DUPLICATE_IDENTITY = enum.auto()
@@ -1017,7 +1039,7 @@ class DisconnectReason(LKEnum):
     JOIN_FAILURE = enum.auto()
 
     @classmethod
-    def from_lk(cls, reason: lkmodels.DisconnectReason) -> "DisconnectReason":
+    def from_lk(cls, reason: lkmodels.DisconnectReason) -> DisconnectReason:
         if reason == lkmodels.DisconnectReason.UNKNOWN_REASON:
             return cls.UNKNOWN_REASON
         elif reason == lkmodels.DisconnectReason.CLIENT_INITIATED:
@@ -1038,24 +1060,24 @@ class DisconnectReason(LKEnum):
             raise ValueError(f"Unknown DisconnectReason: {reason}")
 
     def to_lk(self) -> lkmodels.DisconnectReason:
-        if self == self.UNKNOWN_REASON:
+        if self.value == self.UNKNOWN_REASON:
             return lkmodels.DisconnectReason.UNKNOWN_REASON
-        elif self == self.CLIENT_INITIATED:
+        elif self.value == self.CLIENT_INITIATED:
             return lkmodels.DisconnectReason.CLIENT_INITIATED
-        elif self == self.DUPLICATE_IDENTITY:
+        elif self.value == self.DUPLICATE_IDENTITY:
             return lkmodels.DisconnectReason.DUPLICATE_IDENTITY
-        elif self == self.SERVER_SHUTDOWN:
+        elif self.value == self.SERVER_SHUTDOWN:
             return lkmodels.DisconnectReason.SERVER_SHUTDOWN
-        elif self == self.PARTICIPANT_REMOVED:
+        elif self.value == self.PARTICIPANT_REMOVED:
             return lkmodels.DisconnectReason.PARTICIPANT_REMOVED
-        elif self == self.ROOM_DELETED:
+        elif self.value == self.ROOM_DELETED:
             return lkmodels.DisconnectReason.ROOM_DELETED
-        elif self == self.STATE_MISMATCH:
+        elif self.value == self.STATE_MISMATCH:
             return lkmodels.DisconnectReason.STATE_MISMATCH
-        elif self == self.JOIN_FAILURE:
+        elif self.value == self.JOIN_FAILURE:
             return lkmodels.DisconnectReason.JOIN_FAILURE
         else:
-            raise ValueError(f"Unknown DisconnectReason: {self}")
+            raise ValueError(f"Unknown DisconnectReason: {self.value}")
 
 
 @dataclass
@@ -1072,7 +1094,7 @@ class LeaveRequest(LKBase):
     reason: DisconnectReason
 
     @classmethod
-    def from_lk(cls, req: lkrtc.LeaveRequest) -> "LeaveRequest":
+    def from_lk(cls, req: lkrtc.LeaveRequest) -> LeaveRequest:
         return cls(
             can_reconnect=req.can_reconnect,
             reason=DisconnectReason.from_lk(req.reason),
@@ -1094,12 +1116,13 @@ class SpeakerInfo(LKBase):
     // true if speaker is currently active
     bool active = 3;
     """
+
     sid: str
     level: float
     active: bool
 
     @classmethod
-    def from_lk(cls, info: lkmodels.SpeakerInfo) -> "SpeakerInfo":
+    def from_lk(cls, info: lkmodels.SpeakerInfo) -> SpeakerInfo:
         return cls(
             sid=info.sid,
             level=info.level,
@@ -1123,7 +1146,7 @@ class SpeakersChanged(LKBase):
     speakers: List[SpeakerInfo]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.SpeakersChanged) -> "SpeakersChanged":
+    def from_lk(cls, update: lkrtc.SpeakersChanged) -> SpeakersChanged:
         return cls(
             speakers=[SpeakerInfo.from_lk(s) for s in update.speakers],
         )
@@ -1143,7 +1166,7 @@ class RoomUpdate(LKBase):
     room: Room
 
     @classmethod
-    def from_lk(cls, update: lkrtc.RoomUpdate) -> "RoomUpdate":
+    def from_lk(cls, update: lkrtc.RoomUpdate) -> RoomUpdate:
         return cls(
             room=Room.from_lk(update.room),
         )
@@ -1161,12 +1184,13 @@ class ConnectionQuality(LKEnum):
     GOOD = 1;
     EXCELLENT = 2;
     """
+
     POOR = 0
     GOOD = 1
     EXCELLENT = 2
 
     @classmethod
-    def from_lk(cls, quality: lkmodels.ConnectionQuality) -> "ConnectionQuality":
+    def from_lk(cls, quality: lkmodels.ConnectionQuality) -> ConnectionQuality:
         if quality == lkmodels.ConnectionQuality.POOR:
             return cls.POOR
         elif quality == lkmodels.ConnectionQuality.GOOD:
@@ -1177,14 +1201,14 @@ class ConnectionQuality(LKEnum):
             raise ValueError(f"Unknown ConnectionQuality: {quality}")
 
     def to_lk(self) -> lkmodels.ConnectionQuality:
-        if self == self.POOR:
+        if self.value == self.POOR:
             return lkmodels.ConnectionQuality.POOR
-        elif self == self.GOOD:
+        elif self.value == self.GOOD:
             return lkmodels.ConnectionQuality.GOOD
-        elif self == self.EXCELLENT:
+        elif self.value == self.EXCELLENT:
             return lkmodels.ConnectionQuality.EXCELLENT
         else:
-            raise ValueError(f"Unknown ConnectionQuality: {self}")
+            raise ValueError(f"Unknown ConnectionQuality: {self.value}")
 
 
 @dataclass
@@ -1194,12 +1218,13 @@ class ConnectionQualityInfo(LKBase):
     ConnectionQuality quality = 2;
     float score = 3;
     """
+
     participant_sid: str
     quality: ConnectionQuality
     score: float
 
     @classmethod
-    def from_lk(cls, info: lkrtc.ConnectionQualityInfo) -> "ConnectionQualityInfo":
+    def from_lk(cls, info: lkrtc.ConnectionQualityInfo) -> ConnectionQualityInfo:
         return cls(
             participant_sid=info.participant_sid,
             quality=ConnectionQuality.from_lk(info.quality),
@@ -1223,7 +1248,7 @@ class ConnectionQualityUpdate(LKBase):
     updates: List[ConnectionQualityInfo]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.ConnectionQualityUpdate) -> "ConnectionQualityUpdate":
+    def from_lk(cls, update: lkrtc.ConnectionQualityUpdate) -> ConnectionQualityUpdate:
         return cls(
             updates=[ConnectionQualityInfo.from_lk(u) for u in update.updates],
         )
@@ -1240,11 +1265,12 @@ class StreamState(LKEnum):
     ACTIVE = 0;
     PAUSED = 1;
     """
+
     ACTIVE = 0
     PAUSED = 1
 
     @classmethod
-    def from_lk(cls, state: lkrtc.StreamState) -> "StreamState":
+    def from_lk(cls, state: lkrtc.StreamState) -> StreamState:
         if state == lkrtc.StreamState.ACTIVE:
             return cls.ACTIVE
         elif state == lkrtc.StreamState.PAUSED:
@@ -1253,12 +1279,12 @@ class StreamState(LKEnum):
             raise ValueError(f"Unknown StreamState: {state}")
 
     def to_lk(self) -> lkrtc.StreamState:
-        if self == self.ACTIVE:
+        if self.value == self.ACTIVE:
             return lkrtc.StreamState.ACTIVE
-        elif self == self.PAUSED:
+        elif self.value == self.PAUSED:
             return lkrtc.StreamState.PAUSED
         else:
-            raise ValueError(f"Unknown StreamState: {self}")
+            raise ValueError(f"Unknown StreamState: {self.value}")
 
 
 @dataclass
@@ -1268,12 +1294,13 @@ class StreamStateInfo(LKBase):
     string track_sid = 2;
     StreamState state = 3;
     """
+
     participant_sid: str
     track_sid: str
     state: StreamState
 
     @classmethod
-    def from_lk(cls, info: lkrtc.StreamStateInfo) -> "StreamStateInfo":
+    def from_lk(cls, info: lkrtc.StreamStateInfo) -> StreamStateInfo:
         return cls(
             participant_sid=info.participant_sid,
             track_sid=info.track_sid,
@@ -1297,7 +1324,7 @@ class StreamStateUpdate(LKBase):
     stream_states: List[StreamStateInfo]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.StreamStateUpdate) -> "StreamStateUpdate":
+    def from_lk(cls, update: lkrtc.StreamStateUpdate) -> StreamStateUpdate:
         return cls(
             stream_states=[StreamStateInfo.from_lk(s) for s in update.stream_states],
         )
@@ -1314,11 +1341,12 @@ class SubscribedQuality(LKBase):
     VideoQuality quality = 1;
     bool enabled = 2;
     """
+
     quality: VideoQuality
     enabled: bool
 
     @classmethod
-    def from_lk(cls, quality: lkrtc.SubscribedQuality) -> "SubscribedQuality":
+    def from_lk(cls, quality: lkrtc.SubscribedQuality) -> SubscribedQuality:
         return cls(
             quality=VideoQuality.from_lk(quality.quality),
             enabled=quality.enabled,
@@ -1337,11 +1365,12 @@ class SubscribedCodec(LKBase):
     string codec = 1;
     repeated SubscribedQuality qualities = 2;
     """
+
     codec: str
     qualities: List[SubscribedQuality]
 
     @classmethod
-    def from_lk(cls, codec: lkrtc.SubscribedCodec) -> "SubscribedCodec":
+    def from_lk(cls, codec: lkrtc.SubscribedCodec) -> SubscribedCodec:
         return cls(
             codec=codec.codec,
             qualities=[SubscribedQuality.from_lk(q) for q in codec.qualities],
@@ -1367,11 +1396,15 @@ class SubscribedQualityUpdate(LKBase):
     subscribed_codecs: List[SubscribedCodec]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.SubscribedQualityUpdate) -> "SubscribedQualityUpdate":
+    def from_lk(cls, update: lkrtc.SubscribedQualityUpdate) -> SubscribedQualityUpdate:
         return cls(
             track_sid=update.track_sid,
-            subscribed_qualities=[SubscribedQuality.from_lk(q) for q in update.subscribed_qualities],
-            subscribed_codecs=[SubscribedCodec.from_lk(c) for c in update.subscribed_codecs],
+            subscribed_qualities=[
+                SubscribedQuality.from_lk(q) for q in update.subscribed_qualities
+            ],
+            subscribed_codecs=[
+                SubscribedCodec.from_lk(c) for c in update.subscribed_codecs
+            ],
         )
 
     def to_lk(self) -> lkrtc.SubscribedQualityUpdate:
@@ -1395,7 +1428,9 @@ class SubscriptionPermissionUpdate(LKBase):
     allowed: bool
 
     @classmethod
-    def from_lk(cls, update: lkrtc.SubscriptionPermissionUpdate) -> "SubscriptionPermissionUpdate":
+    def from_lk(
+        cls, update: lkrtc.SubscriptionPermissionUpdate
+    ) -> SubscriptionPermissionUpdate:
         return cls(
             participant_sid=update.participant_sid,
             track_sid=update.track_sid,
@@ -1419,7 +1454,9 @@ class TrackUnpublishedResponse(LKBase):
     track_sid: str
 
     @classmethod
-    def from_lk(cls, response: lkrtc.TrackUnpublishedResponse) -> "TrackUnpublishedResponse":
+    def from_lk(
+        cls, response: lkrtc.TrackUnpublishedResponse
+    ) -> TrackUnpublishedResponse:
         return cls(
             track_sid=response.track_sid,
         )
@@ -1437,12 +1474,13 @@ class SimulcastCodec(LKBase):
     string cid = 2;
     bool enable_simulcast_layers = 3;
     """
+
     codec: str
     cid: str
     enable_simulcast_layers: bool
 
     @classmethod
-    def from_lk(cls, codec: lkrtc.SimulcastCodec) -> "SimulcastCodec":
+    def from_lk(cls, codec: lkrtc.SimulcastCodec) -> SimulcastCodec:
         return cls(
             codec=codec.codec,
             cid=codec.cid,
@@ -1485,21 +1523,21 @@ class AddTrackRequest(LKBase):
     bool disable_red = 13;
     """
     cid: str
-    name: str
+    name: Optional[str]
     type: TrackType
     width: int
     height: int
     muted: bool
-    disable_dtx: bool
+    disable_dtx: Optional[bool]
     source: TrackSource
     layers: List[VideoLayer]
     simulcast_codecs: List[SimulcastCodec]
-    sid: str
-    stereo: bool
-    disable_red: bool
+    sid: Optional[str]
+    stereo: Optional[bool]
+    disable_red: Optional[bool]
 
     @classmethod
-    def from_lk(cls, request: lkrtc.AddTrackRequest) -> "AddTrackRequest":
+    def from_lk(cls, request: lkrtc.AddTrackRequest) -> AddTrackRequest:
         return cls(
             cid=request.cid,
             name=request.name,
@@ -1510,7 +1548,9 @@ class AddTrackRequest(LKBase):
             disable_dtx=request.disable_dtx,
             source=TrackSource.from_lk(request.source),
             layers=[VideoLayer.from_lk(layer) for layer in request.layers],
-            simulcast_codecs=[SimulcastCodec.from_lk(codec) for codec in request.simulcast_codecs],
+            simulcast_codecs=[
+                SimulcastCodec.from_lk(codec) for codec in request.simulcast_codecs
+            ],
             sid=request.sid,
             stereo=request.stereo,
             disable_red=request.disable_red,
@@ -1541,11 +1581,14 @@ class ParticipantTracks(LKBase):
     string participant_sid = 1;
     repeated string track_sids = 2;
     """
+
     participant_sid: ParticipantId
     track_sids: List[TrackId]
 
     @classmethod
-    def from_lk(cls, participant_tracks: lkmodels.ParticipantTracks) -> "ParticipantTracks":
+    def from_lk(
+        cls, participant_tracks: lkmodels.ParticipantTracks
+    ) -> ParticipantTracks:
         return cls(
             participant_sid=participant_tracks.participant_sid,
             track_sids=[sid for sid in participant_tracks.track_sids],
@@ -1566,16 +1609,18 @@ class UpdateSubscription(LKBase):
     bool subscribe = 2;
     repeated ParticipantTracks participant_tracks = 3;
     """
-    track_sids: List[str]
+    track_sids: List[TrackId]
     subscribe: bool
     participant_tracks: List[ParticipantTracks]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.UpdateSubscription) -> "UpdateSubscription":
+    def from_lk(cls, update: lkrtc.UpdateSubscription) -> UpdateSubscription:
         return cls(
             track_sids=[s for s in update.track_sids],
             subscribe=update.subscribe,
-            participant_tracks=[ParticipantTracks.from_lk(p) for p in update.participant_tracks],
+            participant_tracks=[
+                ParticipantTracks.from_lk(p) for p in update.participant_tracks
+            ],
         )
 
     def to_lk(self) -> lkrtc.UpdateSubscription:
@@ -1603,13 +1648,13 @@ class UpdateTrackSettings(LKBase):
     """
     track_sids: List[str]
     disabled: bool
-    quality: VideoQuality
-    width: int
-    height: int
-    fps: int
+    quality: Optional[VideoQuality]
+    width: Optional[int]
+    height: Optional[int]
+    fps: Optional[int]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.UpdateTrackSettings) -> "UpdateTrackSettings":
+    def from_lk(cls, update: lkrtc.UpdateTrackSettings) -> UpdateTrackSettings:
         return cls(
             track_sids=[s for s in update.track_sids],
             disabled=update.disabled,
@@ -1641,7 +1686,7 @@ class UpdateVideoLayers(LKBase):
     layers: List[VideoLayer]
 
     @classmethod
-    def from_lk(cls, update: lkrtc.UpdateVideoLayers) -> "UpdateVideoLayers":
+    def from_lk(cls, update: lkrtc.UpdateVideoLayers) -> UpdateVideoLayers:
         return cls(
             track_sid=update.track_sid,
             layers=[VideoLayer.from_lk(layer) for layer in update.layers],
@@ -1663,13 +1708,14 @@ class TrackPermission(LKBase):
     repeated string track_sids = 3;
     string participant_identity = 4;
     """
+
     participant_sid: str
     all_tracks: bool
     track_sids: List[str]
     participant_identity: str
 
     @classmethod
-    def from_lk(cls, permission: lkrtc.TrackPermission) -> "TrackPermission":
+    def from_lk(cls, permission: lkrtc.TrackPermission) -> TrackPermission:
         return cls(
             participant_sid=permission.participant_sid,
             all_tracks=permission.all_tracks,
@@ -1697,10 +1743,14 @@ class SubscriptionPermission(LKBase):
     track_permissions: List[TrackPermission]
 
     @classmethod
-    def from_lk(cls, permission: lkrtc.SubscriptionPermission) -> "SubscriptionPermission":
+    def from_lk(
+        cls, permission: lkrtc.SubscriptionPermission
+    ) -> SubscriptionPermission:
         return cls(
             all_participants=permission.all_participants,
-            track_permissions=[TrackPermission.from_lk(p) for p in permission.track_permissions],
+            track_permissions=[
+                TrackPermission.from_lk(p) for p in permission.track_permissions
+            ],
         )
 
     def to_lk(self) -> lkrtc.SubscriptionPermission:
@@ -1722,7 +1772,7 @@ class SessionDescription(LKBase):
     sdp: str
 
     @classmethod
-    def from_lk(cls, desc: lkrtc.SessionDescription) -> "SessionDescription":
+    def from_lk(cls, desc: lkrtc.SessionDescription) -> SessionDescription:
         return cls(
             type=desc.type,
             sdp=desc.sdp,
@@ -1738,34 +1788,38 @@ class SessionDescription(LKBase):
         # aiortc.RTCSessionDescription and SessionDescription are compatible, but...
         return aiortc.RTCSessionDescription(type=self.type, sdp=self.sdp)
 
-    def to_signal_request(self):
+    def to_signal_request(self) -> lkrtc.SignalRequest:
         # special handling because offer and answer share the same type
         return lkrtc.SignalRequest(**{self.type: self.to_lk()})
 
     @classmethod
-    def from_signal_response(cls, response: lkrtc.SignalResponse):
+    def from_signal_response(cls, response: lkrtc.SignalResponse) -> SessionDescription:
         # special handling because offer and answer share the same type
         if response.WhichOneof("message") == "offer":
             return cls.from_lk(response.offer)
         elif response.WhichOneof("message") == "answer":
             return cls.from_lk(response.answer)
         else:
-            raise ValueError(f"SignalResponse does not contain offer or answer: {response}")
+            raise ValueError(
+                f"SignalResponse does not contain offer or answer: {response}"
+            )
 
     @classmethod
-    def from_signal_request(cls, request: lkrtc.SignalRequest):
+    def from_signal_request(cls, request: lkrtc.SignalRequest) -> SessionDescription:
         # special handling because offer and answer share the same type
         if request.WhichOneof("message") == "offer":
             return cls.from_lk(request.offer)
         elif request.WhichOneof("message") == "answer":
             return cls.from_lk(request.answer)
         else:
-            raise ValueError(f"SignalRequest does not contain offer or answer: {request}")
+            raise ValueError(
+                f"SignalRequest does not contain offer or answer: {request}"
+            )
 
-    def get_response_name(self):
+    def get_response_name(self) -> str:
         return self.type
 
-    def get_request_name(self):
+    def get_request_name(self) -> str:
         return self.type
 
 
@@ -1776,12 +1830,13 @@ class DataChannelInfo:
     uint32 id = 2;
     SignalTarget target = 3;
     """
+
     label: str
     id: int
     target: SignalTarget
 
     @classmethod
-    def from_lk(cls, info: lkrtc.DataChannelInfo) -> "DataChannelInfo":
+    def from_lk(cls, info: lkrtc.DataChannelInfo) -> DataChannelInfo:
         return cls(
             label=info.label,
             id=info.id,
@@ -1815,11 +1870,13 @@ class SyncState(LKBase):
     offer: SessionDescription
 
     @classmethod
-    def from_lk(cls, state: lkrtc.SyncState) -> "SyncState":
+    def from_lk(cls, state: lkrtc.SyncState) -> SyncState:
         return cls(
             answer=SessionDescription.from_lk(state.answer),
             subscription=UpdateSubscription.from_lk(state.subscription),
-            publish_tracks=[TrackPublishedResponse.from_lk(p) for p in state.publish_tracks],
+            publish_tracks=[
+                TrackPublishedResponse.from_lk(p) for p in state.publish_tracks
+            ],
             data_channels=[DataChannelInfo.from_lk(d) for d in state.data_channels],
             offer=SessionDescription.from_lk(state.offer),
         )
@@ -1841,7 +1898,7 @@ class Ping(LKBase):
     time: Time
 
     @classmethod
-    def from_lk(cls, ping: int) -> "Ping":
+    def from_lk(cls, ping: int) -> Ping:
         return cls(
             time=Time(ping),
         )
@@ -1856,7 +1913,7 @@ class Pong(LKBase):
     time: Time
 
     @classmethod
-    def from_lk(cls, pong: int) -> "Pong":
+    def from_lk(cls, pong: int) -> Pong:
         return cls(
             time=Time(pong),
         )
@@ -1871,7 +1928,7 @@ class RefreshToken(LKBase):
     token: Token
 
     @classmethod
-    def from_lk(cls, token: str) -> "RefreshToken":
+    def from_lk(cls, token: str) -> RefreshToken:
         return cls(
             token=Token(token),
         )
@@ -1880,11 +1937,11 @@ class RefreshToken(LKBase):
         return str(self.token)
 
 
-map_signal_response_to_class = {}
-map_signal_request_to_class = {}
+map_signal_response_to_class: dict[str, LKBase] = {}
+map_signal_request_to_class: dict[str, LKBase] = {}
 
 
-def init_maps():
+def init_maps() -> None:
     global map_signal_response_to_class
     global map_signal_request_to_class
 

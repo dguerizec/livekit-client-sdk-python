@@ -31,7 +31,7 @@ port: 7880
 rtc:
   # UDP ports to use for client traffic.
   # this port range should be open for inbound traffic on the firewall
-  port_range_start: 60000
+  port_range_start: 50000
   port_range_end: 60099
   # when set, LiveKit enable WebRTC ICE over TCP when UDP isn't available
   # this port *cannot* be behind load balancer or TLS, and must be exposed on the node
