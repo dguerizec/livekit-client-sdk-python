@@ -210,6 +210,8 @@ class Signaling:
                     except aiohttp.client_exceptions.ClientConnectorError:
                         self.logger.error(f"Connection closed - Reconnecting...")
                         pass
+                    except asyncio.CancelledError:
+                        raise
                     except KeyboardInterrupt:
                         await self.close()
                         break
@@ -218,8 +220,11 @@ class Signaling:
                         f"\n\n\nReconnecting in 10 seconds... attempts={attempts}\n\n\n"
                     )
                     await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             self.logger.exception(f"Failed to connect to {url}: {e}")
+            raise
 
         self.logger.error(f"Disconnected from {url}, not retrying.")
 
@@ -231,10 +236,13 @@ class Signaling:
                 self.ping_task = None
             try:
                 await self._ws.close()
-            except:
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 self.logger.exception(f"ERROR: Closing websocket failed")
-                pass
-            self._ws = None
+                raise
+            finally:
+                self._ws = None
 
     async def send(self, obj: LK.LKBase, no_log: bool = False) -> bool:
         if self._ws is None:
@@ -246,6 +254,8 @@ class Signaling:
 
         try:
             await self._ws.send_bytes(lkobj.SerializeToString())
+        except asyncio.CancelledError:
+            raise
         except Exception:
             return False
 
@@ -259,10 +269,14 @@ class Signaling:
             lkobj = lkrtc.SignalResponse()
             lkobj.ParseFromString(msg)
             self.logger.debug(f"Signal received: {type(lkobj)} {lkobj}")
-        except:
+        except asyncio.CancelledError:
+            raise
+        except Exception:
             self.logger.exception(f"Error parsing message: {msg!r}")
         try:
             obj = LK.from_signal_response(lkobj)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             self.logger.exception(f"Failed to parse input: {type(input)} {input}")
             raise
