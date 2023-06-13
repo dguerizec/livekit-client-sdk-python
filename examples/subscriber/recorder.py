@@ -68,6 +68,8 @@ class FrameRecorder(AsyncIOEventEmitter):
 
         _pax_id, _track_id = get_track_ids(track)
 
+        print(f"NEW TRACK: track.id={track.id}, track.kind={track.kind}, pax_id={_pax_id}, track_id={_track_id}")
+
         if _pax_id is None or _track_id is None:
             raise MediaStreamError("Track must have paxid and trid")
 
@@ -87,7 +89,10 @@ class FrameRecorder(AsyncIOEventEmitter):
             except FileExistsError:
                 pass
             if self.record_frames:
-                os.mkdir(path)
+                try:
+                    os.mkdir(path)
+                except FileExistsError:
+                    pass
                 file = f"{path}/frame-%d.png"
             else:
                 file = f"{path}_video.mp4"
@@ -114,6 +119,7 @@ class FrameRecorder(AsyncIOEventEmitter):
 
             self.tracks[track_id] = record
             self.emit(self.track_added, track)
+            logger.debug(f"Added track {track.kind} #{track.id} to recorder")
 
         except Exception as e:
             logger.exception(
@@ -160,16 +166,22 @@ class FrameRecorder(AsyncIOEventEmitter):
     async def __run_track(self, record: StreamContext) -> None:
         while True:
             try:
+                logger.debug(f"Waiting for frame")
                 frame = await record.track.recv()
-            except MediaStreamError:
+            except MediaStreamError as e:
                 logger.exception(f"Recorder track {record.track.trid} ended")
+                print(f"Recorder track {record.track.trid} ended {e}")
                 return
-            except:
+            except Exception as e:
                 logger.exception(f"Recorder track {record.track.trid} ended")
+                print(f"Recorder track {record.track.trid} ended {e}")
                 return
 
+            print(f"Got frame")
             if record.can_start is False:
                 continue
+
+            print(f"Recording track {record.track.trid} frame {frame}")
 
             if not record.context.started:
                 # adjust the output size to match the first frame

@@ -128,15 +128,17 @@ def create_pc(
 
 
 def get_track_ids(track: MediaStreamTrack) -> tuple[Optional[str], Optional[str]]:
-    msid = getattr(track, "msid", None)
-    if msid is None:
-        return None, None
-    if not " " in msid:
-        return None, msid
+    # FIXME: return the track_id once, we should not need the pax_id
+    return track.id, track.id
+    #msid = getattr(track, "msid", None)
+    #if msid is None:
+    #    return None, None
+    #if not " " in msid:
+    #    return None, msid
 
-    bits = msid.split(" ")
-    pax_id = (
-        bits[0].split(":")[0] if bits and len(bits) > 0 and ":" in bits[0] else None
-    )
-    track_id = bits[1] if bits and len(bits) > 1 else None
-    return pax_id, track_id
+    #bits = msid.split(" ")
+    #pax_id = (
+    #    bits[0].split(":")[0] if bits and len(bits) > 0 and ":" in bits[0] else None
+    #)
+    #track_id = bits[1] if bits and len(bits) > 1 else None
+    #return pax_id, track_id

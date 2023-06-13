@@ -69,7 +69,7 @@ async def run(recorder: FrameRecorder, signaling: Signaling) -> None:
 
     @sub.on("track")  # type: ignore
     def on_track(track: MediaStreamTrack) -> None:
-        logger.warning(f"Receiving track {track.kind} {track.id} {track.msid}")
+        logger.warning(f"Receiving track {track.kind} {track.id}")
 
         if track.kind == "audio":
             return
@@ -90,6 +90,7 @@ async def run(recorder: FrameRecorder, signaling: Signaling) -> None:
     @recorder.on(FrameRecorder.track_added)  # type: ignore
     def on_track_added(track: MediaStreamTrack) -> None:
         logger.debug(f"on_track_added Adding track {track.trid}")
+        print(f"on_track_added Adding track {track.trid}")
 
     @recorder.on(FrameRecorder.track_removed)  # type: ignore
     async def on_track_removed(track_id: LK.TrackId) -> None:
