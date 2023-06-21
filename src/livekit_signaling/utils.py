@@ -26,7 +26,7 @@ def create_access_token(
 def proto_to_aio_candidate(candidate: str) -> RTCIceCandidate:
     obj = json.loads(candidate)
     c = candidate_from_sdp(obj["candidate"])
-    c.sdpMid = obj.get("sdpMid")
+    c.sdpMid = obj.get("sdpMid") or "0"
     c.sdpMLineIndex = obj.get("sdpMLineIndex")
     return c
 
