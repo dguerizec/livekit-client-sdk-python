@@ -176,16 +176,19 @@ class Signaling:
 
         url = f"ws{secure}://{self.host}:{self.port}{self.uri}"
 
-        attempts: int = 10
+        attempts: int = 0
+        wait = 0.01
 
         try:
             async with aiohttp.ClientSession() as session:
-                while attempts > 0:
+                while True:
                     try:
                         async with session.ws_connect(
                             url, params=param_dict
                         ) as self._ws:
                             self.logger.info(f"Connected to {url}...")
+                            attempts = 0
+                            wait = 0.01
                             async for msg in self._ws:
                                 if msg.type == aiohttp.WSMsgType.BINARY:
                                     await self.receive2(msg.data)
@@ -215,11 +218,12 @@ class Signaling:
                     except KeyboardInterrupt:
                         await self.close()
                         break
-                    attempts -= 1
-                    print(
-                        f"\n\n\nReconnecting in 10 seconds... attempts={attempts}\n\n\n"
+                    attempts += 1
+                    self.logger.debug(
+                        f"Reconnecting in {wait} seconds... attempts={attempts}"
                     )
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(wait)
+                    wait = min(wait * 2, 2)
         except asyncio.CancelledError:
             raise
         except Exception as e:
